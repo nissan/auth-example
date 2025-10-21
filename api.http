@@ -1,0 +1,40 @@
+@base = http://localhost:8000
+@userEmail = john@example.com
+@password = Str0ngP@ssw0rd!!
+@name = John Doe
+@job = Engineer
+@dob = 1980-04-14T10:00:00Z
+
+###
+# Register user
+# Creates a new user and stores `user_id` for later requests.
+# Run once; subsequent runs will 409 if email already exists.
+# @name register
+POST {{base}}/users
+Content-Type: application/json
+
+{
+  "name": "{{name}}",
+  "email": "{{userEmail}}",
+  "date_of_birth": "{{dob}}",
+  "job_title": "{{job}}",
+  "password": "{{password}}"
+}
+
+###
+# Get my user profile (self or admin)
+# Uses the captured user_id from registration and the latest access_token.
+GET {{base}}/users/{{user_id}}
+
+
+###
+# Simplified Password login
+# user credentials -> returns access+refresh
+# @name login
+POST {{base}}/login
+Content-Type: application/json
+
+{
+  "email": "{{userEmail}}",
+  "password": "{{password}}"
+}
