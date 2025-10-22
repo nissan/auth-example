@@ -2,14 +2,34 @@
 
 A secure authentication microservice implementing passwordless WebAuthn (TouchID/biometric) authentication with JWT tokens. Built for high-security environments with comprehensive logging and authorization controls.
 
+**✨ NEW: Interactive Demo Frontend** - Test TouchID authentication in your browser at `http://localhost:8000`
+
 ## Features
 
 - **Passwordless Authentication**: Uses WebAuthn (TouchID, FaceID, Windows Hello) instead of passwords
+- **Interactive Demo**: Browser-based frontend to test WebAuthn flows
 - **JWT Token-Based Authorization**: Secure, stateless session management
 - **Strong Access Control**: Users can only access their own data
 - **Security Logging**: Comprehensive audit trail for security monitoring
 - **SQLite Database**: Persistent user and credential storage
 - **Replay Attack Prevention**: Sign count validation for WebAuthn credentials
+
+## Quick Start
+
+Want to try it right now? Just run:
+
+```bash
+# Install dependencies (first time only)
+pip install -r requirements.txt
+
+# Start the server
+uvicorn main:app --reload
+
+# Open in your browser
+open http://localhost:8000
+```
+
+Then click "Register" and follow the TouchID prompts to create your first account!
 
 ## Architecture
 
@@ -280,18 +300,45 @@ The server will start at `http://localhost:8000`.
 6. **View API documentation**:
 Open `http://localhost:8000/docs` in your browser for interactive API docs.
 
-### Testing
+### Frontend Demo
 
-**Note**: WebAuthn requires browser APIs (`navigator.credentials`) and cannot be tested with curl or Postman. To properly test TouchID:
+**NEW!** We now include a fully functional browser-based demo:
 
-1. You need to create a minimal HTML frontend that calls the WebAuthn browser APIs
-2. The frontend must be served over HTTPS (or localhost for development)
-3. See the `api.http` file for endpoint structure, but actual WebAuthn testing requires JavaScript
+1. **Start the server**: `uvicorn main:app --reload`
+2. **Open your browser**: Navigate to `http://localhost:8000`
+3. **Register a new account**:
+   - Fill in the registration form (name, email, date of birth, job title)
+   - Click "Register with Biometrics"
+   - Your browser will prompt for TouchID/FaceID/Windows Hello
+   - Authenticate with your biometric
+   - You'll automatically be logged in and see your profile
+4. **Test login**:
+   - Click "Logout"
+   - Switch to the "Login" tab
+   - Enter your email
+   - Click "Login with Biometrics"
+   - Authenticate again to access your profile
 
-**Testing without WebAuthn client** (for backend verification only):
-- The endpoints are implemented and will validate the WebAuthn protocol correctly
-- You can test endpoint availability and error handling with curl
-- Full integration testing requires a WebAuthn-capable client
+**Features**:
+- ✅ Live JWT expiration countdown
+- ✅ Session management (cleared on tab close)
+- ✅ Real-time status messages
+- ✅ Loading indicators during biometric prompts
+- ✅ Responsive design (mobile & desktop)
+- ✅ Error handling for all scenarios
+
+**Browser Requirements**:
+- Chrome/Edge (recommended)
+- Safari (macOS Big Sur+, iOS 14+)
+- Firefox
+- Requires biometric hardware (TouchID, FaceID, Windows Hello, or security key)
+
+### API Testing
+
+For API-only testing without the frontend:
+- See the `api.http` file for endpoint structure
+- Note: `/register/complete` and `/login/complete` require WebAuthn credentials from browser APIs
+- Use the interactive frontend for actual TouchID testing
 
 ## Database Schema
 
