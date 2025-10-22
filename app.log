@@ -1,0 +1,8 @@
+2025-10-22 15:19:57,064 [INFO] Database tables created successfully
+2025-10-22 15:20:10,706 [WARNING] Login attempt for non-existent user: nissan.dookeran@gmail.com from IP: 127.0.0.1
+2025-10-22 15:20:13,559 [WARNING] Login attempt for non-existent user: nissan.dookeran@gmail.com from IP: 127.0.0.1
+2025-10-22 15:23:38,675 [INFO] Database tables created successfully
+2025-10-22 15:24:14,171 [INFO] Database tables created successfully
+2025-10-22 15:24:27,224 [INFO] Registration initiated for: test@example.com from IP: 127.0.0.1
+2025-10-22 15:26:16,698 [INFO] Database tables created successfully
+2025-10-22 15:26:24,391 [INFO] Registration initiated for: test2@example.com from IP: 127.0.0.1

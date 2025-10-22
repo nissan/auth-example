@@ -265,7 +265,9 @@ This protocol design prevents replay attacks and ensures the user is physically 
 
 Users self-register with First Name, Last Name, Email, Date of Birth, and Job Title. WebAuthn creates a phishing-resistant credential tied to the user's device biometrics.
 
-#### Step 1: POST /register/begin
+**Note**: For spec compatibility, `POST /users` is available as a redirect endpoint. It returns a `307 Temporary Redirect` to `/register/begin`, preserving the POST method and request body. Clients that follow redirects will automatically be routed to the correct endpoint.
+
+#### Step 1: POST /register/begin (or POST /users)
 
 Initiates registration by sending user information. Server generates a cryptographic challenge.
 
