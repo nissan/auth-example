@@ -10,7 +10,7 @@ from pathlib import Path
 
 def reset_database():
     """Delete the SQLite database file and app.log to start fresh."""
-    db_path = Path("auth.db")
+    db_path = Path("app.db")
     log_path = Path("app.log")
 
     print("🔄 Database Reset Script")
