@@ -300,6 +300,27 @@ The server will start at `http://localhost:8000`.
 6. **View API documentation**:
 Open `http://localhost:8000/docs` in your browser for interactive API docs.
 
+### Testing & Development
+
+**Reset Database** (to test registration multiple times):
+
+If you need to clear all users and credentials to test registration again:
+
+```bash
+# Option 1: Python script only (just clears DB)
+python3 reset_db.py
+
+# Option 2: Shell script (clears DB and restarts server)
+./reset.sh
+```
+
+This is useful when:
+- Testing registration flow multiple times with the same email
+- Clearing test data between development sessions
+- You only have one device with TouchID and want to re-register
+
+Note: The database and logs will be automatically recreated on the next server request.
+
 ### Frontend Demo
 
 **NEW!** We now include a fully functional browser-based demo:
