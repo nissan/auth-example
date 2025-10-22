@@ -32,14 +32,21 @@ class User(Base):
     __tablename__ = "users"
 
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    name = Column(String, nullable=False)
+    first_name = Column(String, nullable=False)
+    last_name = Column(String, nullable=False)
     email = Column(String, unique=True, nullable=False, index=True)
     date_of_birth = Column(DateTime, nullable=False)
     job_title = Column(String, nullable=False)
+    role = Column(String, default="user", nullable=False)  # "user" or "admin"
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     # Relationship to WebAuthn credentials
     credentials = relationship("WebAuthnCredential", back_populates="user", cascade="all, delete-orphan")
+
+    @property
+    def full_name(self) -> str:
+        """Return full name (first + last)"""
+        return f"{self.first_name} {self.last_name}"
 
 class WebAuthnCredential(Base):
     """WebAuthn credential model storing public keys and metadata"""
@@ -289,7 +296,8 @@ def get_current_user(
 # ===================== Pydantic Models ===========================
 class UserRegistrationRequest(BaseModel):
     """Request model for initiating user registration"""
-    name: str
+    first_name: str = Field(..., min_length=1, max_length=100)
+    last_name: str = Field(..., min_length=1, max_length=100)
     email: EmailStr
     date_of_birth: datetime
     job_title: str
@@ -297,10 +305,12 @@ class UserRegistrationRequest(BaseModel):
 class UserViewModel(BaseModel):
     """Response model for user data (excludes sensitive info)"""
     id: str
-    name: str
+    first_name: str
+    last_name: str
     email: EmailStr
     date_of_birth: datetime
     job_title: str
+    role: str
     created_at: datetime
 
 class RegistrationCompleteRequest(BaseModel):
@@ -375,7 +385,7 @@ def register_begin(
         rp_name=RP_NAME,
         user_id=user_id_bytes,
         user_name=user_data.email,
-        user_display_name=user_data.name,
+        user_display_name=f"{user_data.first_name} {user_data.last_name}",
         authenticator_selection=AuthenticatorSelectionCriteria(
             authenticator_attachment=AuthenticatorAttachment.PLATFORM,  # TouchID
             user_verification=UserVerificationRequirement.REQUIRED
@@ -386,7 +396,8 @@ def register_begin(
     registration_challenges[user_data.email] = {
         "challenge": options.challenge,
         "user_id": user_id,
-        "name": user_data.name,
+        "first_name": user_data.first_name,
+        "last_name": user_data.last_name,
         "email": user_data.email,
         "date_of_birth": user_data.date_of_birth,
         "job_title": user_data.job_title
@@ -476,13 +487,15 @@ def register_complete(
             expected_origin=ORIGIN
         )
 
-        # Create user in database
+        # Create user in database (default role is "user")
         user = User(
             id=stored_data["user_id"],
-            name=stored_data["name"],
+            first_name=stored_data["first_name"],
+            last_name=stored_data["last_name"],
             email=stored_data["email"],
             date_of_birth=stored_data["date_of_birth"],
-            job_title=stored_data["job_title"]
+            job_title=stored_data["job_title"],
+            role="user"  # Default role for self-registration
         )
         db.add(user)
 
@@ -510,17 +523,19 @@ def register_complete(
             ip_address=ip_address,
             user_agent=user_agent,
             success=True,
-            details=f"User {user.name} registered successfully"
+            details=f"User {user.full_name} registered successfully"
         )
 
-        logger.info(f"User registered successfully: {user.name} ({user.email}), job: {user.job_title} from IP: {ip_address}")
+        logger.info(f"User registered successfully: {user.full_name} ({user.email}), job: {user.job_title} from IP: {ip_address}")
 
         return UserViewModel(
             id=user.id,
-            name=user.name,
+            first_name=user.first_name,
+            last_name=user.last_name,
             email=user.email,
             date_of_birth=user.date_of_birth,
             job_title=user.job_title,
+            role=user.role,
             created_at=user.created_at
         )
 
@@ -636,7 +651,7 @@ def login_begin(
         ip_address=ip_address,
         user_agent=user_agent,
         success=True,
-        details=f"Authentication challenge created for {user.name}"
+        details=f"Authentication challenge created for {user.full_name}"
     )
 
     logger.info(f"Login initiated for: {login_data.email} from IP: {ip_address}")
@@ -742,12 +757,14 @@ def login_complete(
         # Get user info
         user = db.query(User).filter(User.id == stored_data["user_id"]).first()
 
-        # Generate JWT token
+        # Generate JWT token with role claim
         token = create_access_token(
             data={
                 "sub": user.id,
                 "email": user.email,
-                "name": user.name
+                "first_name": user.first_name,
+                "last_name": user.last_name,
+                "role": user.role  # Include role for authorization checks
             }
         )
 
@@ -763,18 +780,20 @@ def login_complete(
             ip_address=ip_address,
             user_agent=user_agent,
             success=True,
-            details=f"User {user.name} logged in successfully"
+            details=f"User {user.full_name} logged in successfully"
         )
 
-        logger.info(f"User logged in successfully: {user.name} ({user.email}) from IP: {ip_address}")
+        logger.info(f"User logged in successfully: {user.full_name} ({user.email}) from IP: {ip_address}")
 
         return {
             "access_token": token,
             "token_type": "bearer",
             "user": {
                 "id": user.id,
-                "name": user.name,
-                "email": user.email
+                "first_name": user.first_name,
+                "last_name": user.last_name,
+                "email": user.email,
+                "role": user.role
             }
         }
 
@@ -829,11 +848,16 @@ def get_user(
     ip_address = get_client_ip(http_request)
     user_agent = get_user_agent(http_request)
 
-    # Authorization: Users can only view their own profile
-    if current_user.id != user_id:
+    # Authorization: Role-based access control
+    # - Users with "user" role can only view their own profile
+    # - Users with "admin" role can view any user's profile
+    is_own_profile = current_user.id == user_id
+    is_admin = current_user.role == "admin"
+
+    if not is_own_profile and not is_admin:
         logger.warning(
-            f"Authorization failed: User {current_user.email} attempted to access "
-            f"user {user_id}'s data from IP: {ip_address}"
+            f"Authorization failed: User {current_user.email} (role: {current_user.role}) "
+            f"attempted to access user {user_id}'s data from IP: {ip_address}"
         )
         # Log authorization failure
         create_audit_log(
@@ -844,7 +868,7 @@ def get_user(
             ip_address=ip_address,
             user_agent=user_agent,
             success=False,
-            details=f"Attempted to access user {user_id}'s data"
+            details=f"Insufficient permissions (role: {current_user.role}). Attempted to access user {user_id}'s data"
         )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -879,16 +903,18 @@ def get_user(
         ip_address=ip_address,
         user_agent=user_agent,
         success=True,
-        details=f"User {user.name} accessed their profile"
+        details=f"User {user.full_name} accessed by {current_user.full_name} (role: {current_user.role})"
     )
 
-    logger.info(f"User data accessed: {user.email} from IP: {ip_address}")
+    logger.info(f"User data accessed: {user.email} by {current_user.email} (role: {current_user.role}) from IP: {ip_address}")
 
     return UserViewModel(
         id=user.id,
-        name=user.name,
+        first_name=user.first_name,
+        last_name=user.last_name,
         email=user.email,
         date_of_birth=user.date_of_birth,
         job_title=user.job_title,
+        role=user.role,
         created_at=user.created_at
     )

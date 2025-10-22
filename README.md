@@ -1,173 +1,344 @@
-# WebAuthn Authentication Backend
+# WebAuthn Authentication Microservice
 
-A secure authentication microservice implementing passwordless WebAuthn (TouchID/biometric) authentication with JWT tokens. Built for high-security environments with comprehensive logging and authorization controls.
+A secure authentication microservice implementing passwordless WebAuthn (TouchID/biometric) authentication with JWT tokens and role-based access control. Built for high-security environments with comprehensive logging and authorization controls.
 
-**✨ NEW: Interactive Demo Frontend** - Test TouchID authentication in your browser at `http://localhost:8000`
+**✨ Interactive Demo Frontend** - Test TouchID authentication in your browser at `http://localhost:8000`
 
-## Features
+## Table of Contents
 
-- **Passwordless Authentication**: Uses WebAuthn (TouchID, FaceID, Windows Hello) instead of passwords
-- **Interactive Demo**: Browser-based frontend to test WebAuthn flows
-- **JWT Token-Based Authorization**: Secure, stateless session management
-- **Strong Access Control**: Users can only access their own data
-- **Security Logging**: Comprehensive audit trail for security monitoring
-- **SQLite Database**: Persistent user and credential storage
-- **Replay Attack Prevention**: Sign count validation for WebAuthn credentials
+- [Microservice Architecture Goals](#microservice-architecture-goals)
+- [Threat Model](#threat-model)
+- [Security Controls](#security-controls)
+- [Endpoint Implementations](#endpoint-implementations)
+- [Role-Based Access Control](#role-based-access-control)
+- [Quick Start](#quick-start)
+- [Database Schema](#database-schema)
+- [Configuration](#configuration)
+- [Development & Testing](#development--testing)
 
-## Quick Start
+---
 
-Want to try it right now? Just run:
+## Microservice Architecture Goals
 
-```bash
-# Install dependencies (first time only)
-pip install -r requirements.txt
+This authentication microservice is designed to be:
 
-# Start the server
-uvicorn main:app --reload
+1. **Stateless**: JWT-based authentication eliminates server-side session storage
+2. **API-First**: RESTful JSON API suitable for integration with any frontend
+3. **Phishing-Resistant**: WebAuthn prevents credential theft and phishing attacks
+4. **Auditable**: Comprehensive logging supports security monitoring and compliance
+5. **Scalable**: No session state allows horizontal scaling
+6. **Microservice-Ready**: Designed to run in containerized environments with external infrastructure support (load balancers, secret managers, monitoring)
 
-# Open in your browser
-open http://localhost:8000
+### Key Design Principles
+
+- **Defense in Depth**: Authentication (WebAuthn) + Authorization (JWT + RBAC)
+- **Least Privilege**: Users can only access their own data; admin role for cross-user access
+- **Security by Default**: Secure configurations, comprehensive logging, input validation
+- **Operational Visibility**: Dual logging (file + database) for security team monitoring
+
+---
+
+## Threat Model
+
+### Security Assumptions
+
+This microservice is designed for deployment in a **high-security environment** with:
+
+1. **Infrastructure-Layer Security**: TLS termination at load balancer/reverse proxy
+2. **Network Security**: WAF, DDoS protection, and rate limiting at infrastructure layer
+3. **Secrets Management**: External secret manager (Vault, AWS Secrets Manager, Azure Key Vault)
+4. **Centralized Logging**: Integration with SIEM/log aggregation (ELK, Splunk, CloudWatch)
+5. **Internal Deployment**: Not directly exposed to the public internet
+
+### Threat Actors & Mitigations
+
+| Threat | Attack Vector | Mitigation |
+|--------|---------------|------------|
+| **Credential Theft** | Password database breach | No passwords stored (WebAuthn only) |
+| **Phishing** | Fake login page | WebAuthn origin binding prevents credential use on wrong domain |
+| **Replay Attacks** | Intercepted authentication | Challenge-response protocol with cryptographic nonces |
+| **Session Hijacking** | Stolen JWT token | Short expiration (60 min), no refresh tokens in this version |
+| **Credential Stuffing** | Reused passwords | No passwords (WebAuthn eliminates this attack) |
+| **MITM Attacks** | Man-in-the-middle | HTTPS required in production (enforced by WebAuthn spec) |
+| **Unauthorized Access** | Accessing other users' data | RBAC with ownership checks on every protected endpoint |
+| **Credential Cloning** | Duplicating biometric credentials | Sign count validation detects cloned credentials |
+| **Account Enumeration** | Discovering valid emails | Generic error messages prevent user enumeration |
+| **Insider Threats** | Malicious admin access | Comprehensive audit logging of all access attempts |
+
+### Security Team Monitoring Support
+
+The microservice provides comprehensive monitoring capabilities:
+
+#### 1. Real-Time Logging
+- **File-based logs** (`app.log`): Immediate visibility during development/debugging
+- **Database audit trail** (`audit_logs` table): Queryable history for analysis
+
+#### 2. Tracked Security Events
+- User registration attempts (with IP, user agent, success/failure)
+- Login attempts (with IP, user agent, success/failure)
+- Authorization failures (users attempting to access others' data)
+- JWT validation failures
+- Credential verification failures
+
+#### 3. Incident Response Capabilities
+```sql
+-- Find failed login attempts (potential brute force)
+SELECT created_at, user_email, ip_address, user_agent, details
+FROM audit_logs
+WHERE event_type='login_complete' AND success=0
+ORDER BY created_at DESC;
+
+-- Detect account compromise (multiple IPs for same user)
+SELECT user_email, ip_address, COUNT(*) as attempts
+FROM audit_logs
+WHERE event_type='login_complete' AND success=1
+GROUP BY user_email, ip_address
+HAVING COUNT(*) > 1;
+
+-- Track unauthorized access attempts
+SELECT created_at, user_email, ip_address, details
+FROM audit_logs
+WHERE event_type='user_access' AND success=0
+ORDER BY created_at DESC;
 ```
 
-Then click "Register" and follow the TouchID prompts to create your first account!
+#### 4. Compliance Support
+- **SOC 2**: Audit trail of all authentication/authorization events
+- **HIPAA**: Comprehensive logging of PHI access (when storing health data)
+- **GDPR**: User activity tracking for right-to-access requests
 
-## Architecture
+---
 
-### Authentication Flow
+## Security Controls
 
-**Registration (Two-Step)**:
-1. `POST /register/begin` - Client sends user info → Server returns WebAuthn challenge
-2. Client creates credential with TouchID → Client sends credential to server
-3. `POST /register/complete` - Server verifies credential → Creates user account
+### Implemented Controls
 
-**Login (Two-Step)**:
-1. `POST /login/begin` - Client sends email → Server returns WebAuthn challenge
-2. Client signs challenge with TouchID → Client sends assertion to server
-3. `POST /login/complete` - Server verifies signature → Returns JWT token
+#### ✅ Authentication
+- **WebAuthn with Platform Authenticators**: TouchID, FaceID, Windows Hello
+- **Multi-Factor by Design**: Something you have (device) + something you are (biometric)
+- **Public Key Cryptography**: Private key never leaves device
+- **Challenge-Response Protocol**: Prevents replay attacks with cryptographic nonces
+- **Sign Count Validation**: Detects and prevents credential cloning
 
-**Accessing Protected Resources**:
-1. Client includes JWT in `Authorization: Bearer <token>` header
-2. Server validates JWT and checks authorization rules
-3. `GET /users/{id}` - Returns user data only if user owns the resource
+#### ✅ Authorization
+- **JWT Token-Based Access Control**: Stateless authentication
+- **Token Expiration**: 60-minute lifetime (configurable)
+- **Role-Based Access Control (RBAC)**:
+  - `user` role: Can only access own data
+  - `admin` role: Can access any user's data
+- **Per-Endpoint Authorization Checks**: Validates ownership or admin role
+- **JWT Claims**: `sub` (user_id), `email`, `first_name`, `last_name`, `role`
 
-### Security Model
+#### ✅ Input Validation
+- **Pydantic Models**: Type-safe validation for all inputs
+- **Email Format Validation**: RFC-compliant email validation
+- **Required Field Validation**: Enforced at API layer
+- **Type Checking**: Prevents type confusion attacks
 
-**Authentication**: Multi-factor by design
-- Something you have: The device with the registered credential
-- Something you are: Biometric verification (TouchID/FaceID)
+#### ✅ Database Security
+- **SQL Injection Prevention**: SQLAlchemy ORM parameterized queries
+- **Email Uniqueness Constraints**: Prevents duplicate accounts
+- **Foreign Key Relationships**: Ensures referential integrity
+- **Indexed Lookups**: Optimized queries on `email`, `event_type`, `created_at`
 
-**Authorization**: Principle of least privilege
-- Users can only access their own user data
-- JWT tokens contain minimal claims (user_id, email, name)
-- Authorization checks happen at endpoint level
+#### ✅ Logging & Monitoring
+- **Dual Logging System**:
+  - File-based (`app.log`): Real-time debugging
+  - Database (`audit_logs`): Long-term audit trail
+- **IP Address Tracking**: All events logged with client IP (handles `X-Forwarded-For`)
+- **User Agent Tracking**: Browser/client identification
+- **Success/Failure Recording**: All authentication/authorization outcomes logged
+- **Generic Error Messages**: Prevents user enumeration
 
-## Endpoint Design Decisions
+#### ✅ Error Handling
+- **Generic Error Messages**: "Invalid credentials" (no hints about user existence)
+- **Proper HTTP Status Codes**: `401` (unauthenticated), `403` (unauthorized), `404` (not found)
+- **Challenge Cleanup**: Failed attempts clean up server-side state
 
-### Differences from Original Specification
+### Deferred Security Controls
 
-The original requirements specified:
-- `POST /users` - User self-registration
+The following controls are **intentionally deferred** due to infrastructure requirements or scope limitations:
+
+#### ❌ Rate Limiting
+- **Why Deferred**: Requires distributed cache (Redis) for multi-instance deployments
+- **Risk**: Brute force attacks possible on registration/login endpoints
+- **Production Recommendation**: Implement with `slowapi` + Redis or infrastructure-level WAF rate limiting
+- **Mitigation**: WebAuthn's biometric requirement slows brute force significantly
+
+#### ❌ HTTPS/TLS
+- **Why Deferred**: Local development uses HTTP
+- **Risk**: Credentials visible to network observers
+- **Production Requirement**: WebAuthn spec **requires** HTTPS in production
+- **Production Recommendation**: TLS termination at reverse proxy (nginx, ALB) with Let's Encrypt certificates
+
+#### ❌ Email Verification
+- **Why Deferred**: Requires email service integration (SendGrid, AWS SES)
+- **Risk**: Users can register with emails they don't own
+- **Production Recommendation**: Send verification email with time-limited token
+- **Workaround**: Manual admin verification of user accounts
+
+#### ❌ Account Recovery Flow
+- **Why Deferred**: Complex multi-step process requiring email service
+- **Risk**: Users who lose device credentials cannot recover access
+- **Current Mitigation**: Users must re-register with new email
+- **Production Recommendation**: Backup authentication methods (recovery codes, secondary device)
+
+#### ❌ Distributed Challenge Storage
+- **Why Deferred**: Currently using in-memory dictionary
+- **Risk**: Server restart invalidates pending registrations/logins
+- **Current Mitigation**: Acceptable for development; users retry registration
+- **Production Recommendation**: Redis with TTL (5-minute expiration)
+
+#### ❌ Secrets Management
+- **Why Deferred**: Using environment variables with fallback defaults
+- **Risk**: JWT secret could be exposed in source code or logs
+- **Current Mitigation**: Documentation requires `JWT_SECRET` in production
+- **Production Requirement**: HashiCorp Vault, AWS Secrets Manager, or Azure Key Vault
+
+#### ❌ Centralized Audit Logging
+- **Why Deferred**: Currently logging to local file and SQLite
+- **Risk**: Logs not centralized, difficult to analyze at scale, can be lost
+- **Current Mitigation**: Dual logging (file + database) for redundancy
+- **Production Recommendation**: ELK stack, Splunk, CloudWatch, or similar SIEM
+
+#### ❌ WAF/DDoS Protection
+- **Why Deferred**: Requires infrastructure (CloudFlare, AWS WAF, Azure Front Door)
+- **Risk**: Application vulnerable to volumetric attacks
+- **Current Mitigation**: None at application level
+- **Production Requirement**: Deploy behind WAF with DDoS protection
+
+#### ❌ Database Encryption at Rest
+- **Why Deferred**: SQLite doesn't support native encryption
+- **Risk**: Database file contains user PII in plaintext on disk
+- **Current Mitigation**: File system permissions restrict access
+- **Production Recommendation**: PostgreSQL with encryption or encrypted filesystem (LUKS, BitLocker)
+
+#### ❌ JWT Refresh Tokens
+- **Why Deferred**: Adds complexity with token rotation logic
+- **Risk**: Users must re-authenticate every 60 minutes
+- **Current Mitigation**: Short session timeout acceptable for high-security applications
+- **Production Recommendation**: Implement refresh token flow with rotation and family tracking
+
+#### ❌ CORS Configuration
+- **Why Deferred**: No specific frontend domain defined
+- **Risk**: Any origin can call the API in browser context
+- **Current Mitigation**: Accept for development; WebAuthn origin binding provides some protection
+- **Production Requirement**: Configure specific allowed origins in CORS middleware
+
+---
+
+## Endpoint Implementations
+
+### Design Philosophy: WebAuthn Two-Step Protocol
+
+The original specification requested:
+- `POST /users` - User registration
 - `POST /login` - User login
 - `GET /users/{id}` - Retrieve user information
 
-Our implementation modifies these endpoints to accommodate WebAuthn's two-step authentication protocol:
+**Our implementation modifies registration and login to accommodate WebAuthn's cryptographic protocol**, which inherently requires two round-trips between client and server.
 
-#### Modified Endpoints
+### Why Two-Step Endpoints Are Required
 
-**Original**: `POST /users`
-**Implemented**: `POST /register/begin` + `POST /register/complete`
+WebAuthn is a **challenge-response protocol** that cannot be collapsed into a single request-response cycle:
 
-**Justification**: WebAuthn is inherently a two-step protocol:
-1. Server generates a challenge and registration options
-2. Client creates credential with authenticator (TouchID)
-3. Client sends credential back to server for verification
-4. Server validates and stores the credential
+1. **Server must generate a cryptographic challenge** (random nonce)
+2. **Client must sign the challenge** with the authenticator (TouchID/FaceID)
+3. **Browser APIs are asynchronous** and require user interaction (biometric prompt)
+4. **Signed result must be sent back** for verification
 
-A single `/users` endpoint cannot handle this flow because step 2 happens client-side with browser APIs. The registration must be split into two round-trips.
+This protocol design prevents replay attacks and ensures the user is physically present with the registered device.
 
-**Original**: `POST /login`
-**Implemented**: `POST /login/begin` + `POST /login/complete`
+### Endpoint Specification Compliance
 
-**Justification**: Similar to registration, WebAuthn authentication requires:
-1. Server sends challenge and allowed credential IDs
-2. Client prompts user for biometric (TouchID)
-3. Client signs challenge with private key
-4. Server verifies signature and issues JWT
+| Original Spec Operation | Our Implementation | Semantic Equivalence |
+|-------------------------|-------------------|---------------------|
+| `POST /users` (register) | `POST /register/begin` → `POST /register/complete` | Two-step registration creates user |
+| `POST /login` | `POST /login/begin` → `POST /login/complete` | Two-step login returns JWT |
+| `GET /users/{id}` | `GET /users/{id}` | **Unchanged** - works as specified |
 
-The challenge-response nature of WebAuthn mandates two separate endpoints.
+**The original requirements are fully satisfied**: users can register, login, and retrieve information. The only difference is that registration and login require two sequential API calls due to the cryptographic protocol.
 
-**Kept**: `GET /users/{id}` - No changes, works as specified with JWT authentication
+---
 
-### Why This Architecture is Necessary
+### POST /users - User Self-Registration (Two-Step Flow)
 
-WebAuthn is a **challenge-response protocol** that prevents replay attacks. The server must:
-1. Generate a cryptographically random challenge
-2. Send it to the client
-3. Wait for the client to sign it
-4. Verify the signature matches the stored public key
+Users self-register with First Name, Last Name, Email, Date of Birth, and Job Title. WebAuthn creates a phishing-resistant credential tied to the user's device biometrics.
 
-This cannot be collapsed into a single request-response cycle because:
-- The client needs the challenge before calling `navigator.credentials.create()` or `navigator.credentials.get()`
-- These browser APIs are asynchronous and require user interaction (TouchID prompt)
-- The signed result must be sent back for verification
+#### Step 1: POST /register/begin
 
-### Maintaining API Compatibility
+Initiates registration by sending user information. Server generates a cryptographic challenge.
 
-While the endpoint structure differs, the semantic operations match the specification:
-
-| Spec Operation | Implementation | HTTP Method | Returns |
-|----------------|----------------|-------------|---------|
-| User Registration | `/register/begin` → `/register/complete` | POST + POST | User object (201) |
-| User Login | `/login/begin` → `/login/complete` | POST + POST | JWT token |
-| Get User Info | `/users/{id}` | GET | User object |
-
-The original requirements are fully satisfied - users can register, login, and retrieve information. The only difference is that registration and login require two API calls instead of one due to the cryptographic protocol.
-
-## API Endpoints
-
-### Public Endpoints
-
-#### `POST /register/begin`
-Initiate user registration.
-
-**Request**:
+**Request:**
 ```json
 {
-  "name": "Jane Doe",
+  "first_name": "Jane",
+  "last_name": "Doe",
   "email": "jane@example.com",
   "date_of_birth": "1990-01-15T00:00:00Z",
   "job_title": "Software Engineer"
 }
 ```
 
-**Response**: WebAuthn PublicKeyCredentialCreationOptions
+**Response:** WebAuthn PublicKeyCredentialCreationOptions
 ```json
 {
   "publicKey": {
-    "challenge": "base64-encoded-challenge",
-    "rp": {"id": "localhost", "name": "Auth Example"},
+    "challenge": "base64url-encoded-challenge",
+    "rp": {
+      "id": "localhost",
+      "name": "Auth Example"
+    },
     "user": {
-      "id": "user-uuid",
+      "id": "base64url-encoded-user-uuid",
       "name": "jane@example.com",
       "displayName": "Jane Doe"
     },
-    "pubKeyCredParams": [...],
+    "pubKeyCredParams": [
+      {"type": "public-key", "alg": -7},
+      {"type": "public-key", "alg": -257}
+    ],
     "authenticatorSelection": {
       "authenticatorAttachment": "platform",
       "userVerification": "required"
-    }
+    },
+    "timeout": 60000
   }
 }
 ```
 
-#### `POST /register/complete`
-Complete registration by submitting the WebAuthn credential.
+**Implementation Details:**
+- Creates user record with `role: "user"` (default)
+- Generates UUID for `user.id`
+- Stores challenge in-memory (5-minute expiration)
+- Logs registration initiation with IP address and user agent
+- Returns WebAuthn options for `navigator.credentials.create()`
 
-**Request**:
+**Security Controls:**
+- Email uniqueness validation (prevents duplicate accounts)
+- Input validation via Pydantic models
+- Audit logging of registration attempts
+- Generic error messages (prevents user enumeration)
+
+---
+
+#### Step 2: POST /register/complete
+
+Completes registration by submitting the WebAuthn credential created by the user's authenticator.
+
+**Request:**
 ```json
 {
   "email": "jane@example.com",
-  "credential": { /* WebAuthn credential from navigator.credentials.create() */ }
+  "credential": {
+    "id": "credential-id-base64url",
+    "rawId": "credential-id-base64url",
+    "response": {
+      "clientDataJSON": "base64url-encoded-json",
+      "attestationObject": "base64url-encoded-cbor"
+    },
+    "type": "public-key"
+  }
 }
 ```
 
@@ -175,463 +346,503 @@ Complete registration by submitting the WebAuthn credential.
 ```json
 {
   "id": "user-uuid",
-  "name": "Jane Doe",
+  "first_name": "Jane",
+  "last_name": "Doe",
   "email": "jane@example.com",
   "date_of_birth": "1990-01-15T00:00:00Z",
   "job_title": "Software Engineer",
+  "role": "user",
   "created_at": "2025-10-22T12:00:00Z"
 }
 ```
 
-#### `POST /login/begin`
-Initiate login.
+**Implementation Details:**
+- Verifies credential signature using `webauthn` library
+- Validates challenge matches stored challenge
+- Stores credential public key in `webauthn_credentials` table
+- Deletes challenge from memory after use
+- Logs successful registration with IP address and user agent
+- Returns complete user object (excluding sensitive credential data)
 
-**Request**:
+**Security Controls:**
+- Cryptographic verification of attestation
+- Challenge validation (prevents replay attacks)
+- Sign count initialization (detects credential cloning)
+- One-time challenge use (deleted after verification)
+- Credential uniqueness constraint in database
+
+---
+
+### POST /login - User Login (Avoids Auth0, Uses JWT)
+
+Login flow uses **WebAuthn challenge-response** instead of external authentication services like Auth0. Returns a **JWT token** containing user claims and role.
+
+#### Step 1: POST /login/begin
+
+Initiates login by providing email. Server generates challenge and returns allowed credentials.
+
+**Request:**
 ```json
 {
   "email": "jane@example.com"
 }
 ```
 
-**Response**: WebAuthn PublicKeyCredentialRequestOptions
+**Response:** WebAuthn PublicKeyCredentialRequestOptions
 ```json
 {
   "publicKey": {
-    "challenge": "base64-encoded-challenge",
+    "challenge": "base64url-encoded-challenge",
     "rpId": "localhost",
     "allowCredentials": [
-      {"type": "public-key", "id": "credential-id-hex"}
+      {
+        "type": "public-key",
+        "id": "credential-id-base64url"
+      }
     ],
-    "userVerification": "required"
+    "userVerification": "required",
+    "timeout": 60000
   }
 }
 ```
 
-#### `POST /login/complete`
-Complete login by submitting the WebAuthn assertion.
+**Implementation Details:**
+- Looks up user by email
+- Retrieves all registered credentials for user
+- Generates fresh challenge (stored in-memory)
+- Logs login initiation with IP address
+- Returns challenge + allowed credential IDs for `navigator.credentials.get()`
 
-**Request**:
+**Security Controls:**
+- Generic error if user not found (prevents user enumeration: "Invalid credentials")
+- Fresh challenge per login attempt
+- All registered credentials allowed (supports multiple devices)
+- Audit logging of login attempts
+
+---
+
+#### Step 2: POST /login/complete
+
+Completes login by submitting the WebAuthn assertion (signed challenge). Returns JWT token.
+
+**Request:**
 ```json
 {
   "email": "jane@example.com",
-  "assertion": { /* WebAuthn assertion from navigator.credentials.get() */ }
+  "assertion": {
+    "id": "credential-id-base64url",
+    "rawId": "credential-id-base64url",
+    "response": {
+      "clientDataJSON": "base64url-encoded-json",
+      "authenticatorData": "base64url-encoded-data",
+      "signature": "base64url-encoded-signature"
+    },
+    "type": "public-key"
+  }
 }
 ```
 
-**Response**:
+**Response:**
 ```json
 {
   "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
   "token_type": "bearer",
   "user": {
     "id": "user-uuid",
-    "name": "Jane Doe",
-    "email": "jane@example.com"
+    "first_name": "Jane",
+    "last_name": "Doe",
+    "email": "jane@example.com",
+    "role": "user"
   }
 }
 ```
 
-### Protected Endpoints
+**Implementation Details:**
+- Verifies signature using stored public key
+- Validates challenge matches expected challenge
+- Validates sign count (must be greater than stored count)
+- Updates stored sign count (prevents credential cloning)
+- Generates JWT token with claims: `sub`, `email`, `first_name`, `last_name`, `role`
+- Logs successful login with IP address and user agent
+- Deletes challenge from memory after use
 
-#### `GET /users/{id}`
-Get user information by ID. Requires JWT authentication.
+**JWT Token Claims:**
+```json
+{
+  "sub": "user-uuid",
+  "email": "jane@example.com",
+  "first_name": "Jane",
+  "last_name": "Doe",
+  "role": "user",
+  "exp": 1729608000,
+  "iat": 1729604400
+}
+```
 
-**Headers**:
+**Security Controls:**
+- Cryptographic signature verification
+- Sign count validation (detects cloned credentials)
+- Challenge validation (prevents replay attacks)
+- Short token expiration (60 minutes, configurable)
+- HS256 signing algorithm with secret key
+- Generic error messages (prevents user enumeration)
+
+**Why Not Auth0:**
+- WebAuthn is the primary authentication mechanism (Auth0 would be redundant)
+- Self-contained microservice with no external dependencies
+- JWT generation is simple and secure with proper key management
+- Avoids vendor lock-in and external service costs
+
+---
+
+### GET /users/{id} - Retrieve User Information (Claims, Roles, Permissions)
+
+Protected endpoint that returns user information. Requires JWT authentication. Implements role-based access control.
+
+**Headers:**
 ```
 Authorization: Bearer <jwt-token>
 ```
 
-**Response**:
+**Response:**
 ```json
 {
   "id": "user-uuid",
-  "name": "Jane Doe",
+  "first_name": "Jane",
+  "last_name": "Doe",
   "email": "jane@example.com",
   "date_of_birth": "1990-01-15T00:00:00Z",
   "job_title": "Software Engineer",
+  "role": "user",
   "created_at": "2025-10-22T12:00:00Z"
 }
 ```
 
-**Errors**:
-- `401 Unauthorized` - Invalid or expired JWT token
-- `403 Forbidden` - User trying to access another user's data
-- `404 Not Found` - User doesn't exist
+**Implementation Details:**
+- Validates JWT token (signature, expiration)
+- Extracts user identity from JWT claims (`sub`, `role`)
+- Checks authorization:
+  - **Users with `user` role**: Can only access their own profile (`user_id == requested_id`)
+  - **Users with `admin` role**: Can access any user's profile
+- Logs access attempt with IP address, user agent, and authorization outcome
+- Returns user object if authorized
 
-## Running Locally
+**Authorization Logic:**
+```python
+is_own_profile = current_user.id == user_id
+is_admin = current_user.role == "admin"
+
+if not is_own_profile and not is_admin:
+    # Deny access, log authorization failure
+    raise HTTPException(status_code=403, detail="You don't have permission to access this resource")
+```
+
+**Security Controls:**
+- JWT validation (signature, expiration)
+- Role-based access control (RBAC)
+- Per-request authorization check
+- Audit logging of access attempts (both success and failure)
+- IP address and user agent tracking
+- Generic error messages
+
+**Error Responses:**
+- `401 Unauthorized`: Invalid or expired JWT token
+- `403 Forbidden`: User trying to access another user's data (non-admin)
+- `404 Not Found`: User doesn't exist
+
+**Audit Logging:**
+- **Success**: "User Jane Doe accessed by Jane Doe (role: user) from IP: 192.168.1.1"
+- **Failure (non-admin accessing others' data)**: "Authorization failed: User jane@example.com (role: user) attempted to access user abc-123's data from IP: 192.168.1.1"
+
+---
+
+## Role-Based Access Control
+
+### Roles
+
+| Role | Permissions | Use Case |
+|------|-------------|----------|
+| `user` | Access own data only | Default role for all registered users |
+| `admin` | Access any user's data | Support staff, security team, auditors |
+
+### Role Assignment
+
+- **Default**: All users registered via `POST /register/begin` receive `role: "user"`
+- **Admin Assignment**: Currently requires direct database update (no API endpoint for role promotion)
+  ```sql
+  UPDATE users SET role='admin' WHERE email='admin@example.com';
+  ```
+- **Future Enhancement**: Implement `POST /admin/users/{id}/promote` endpoint (requires authentication as existing admin)
+
+### Role Claims in JWT
+
+The `role` claim is embedded in the JWT token during login:
+
+```json
+{
+  "sub": "user-uuid",
+  "email": "admin@example.com",
+  "first_name": "Admin",
+  "last_name": "User",
+  "role": "admin",
+  "exp": 1729608000,
+  "iat": 1729604400
+}
+```
+
+### Authorization Enforcement
+
+Authorization is enforced at the endpoint level using dependency injection:
+
+```python
+def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+    # Validates JWT and extracts user from database
+    # Raises 401 if invalid
+    return user
+
+@app.get("/users/{user_id}")
+def get_user(user_id: str, current_user: User = Depends(get_current_user), ...):
+    # Check authorization based on role
+    is_own_profile = current_user.id == user_id
+    is_admin = current_user.role == "admin"
+
+    if not is_own_profile and not is_admin:
+        # Log and deny access
+        raise HTTPException(status_code=403, ...)
+```
+
+### Admin Access Logging
+
+All admin access is logged with full context:
+
+```sql
+SELECT * FROM audit_logs WHERE user_email='admin@example.com' AND event_type='user_access';
+```
+
+Example log entry:
+```
+event_type: user_access
+user_email: admin@example.com
+user_id: admin-uuid
+ip_address: 192.168.1.1
+success: 1
+details: User John Doe accessed by Admin User (role: admin)
+```
+
+---
+
+## Quick Start
 
 ### Prerequisites
 - Python 3.9+
 - Modern browser with WebAuthn support (Chrome, Safari, Firefox, Edge)
+- Biometric hardware (TouchID, FaceID, Windows Hello) or security key
 
-### Setup
+### Installation
 
-1. **Clone and navigate to the repository**:
 ```bash
+# Clone and navigate to repository
 cd auth-example
-```
 
-2. **Create and activate virtual environment**:
-```bash
+# Create virtual environment
 python -m venv .venv
 source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-```
 
-3. **Install dependencies**:
-```bash
+# Install dependencies
 pip install -r requirements.txt
-```
 
-4. **Set environment variables** (optional):
-```bash
-export JWT_SECRET="your-secure-secret-key"
-export RP_ID="localhost"
-export RP_NAME="Auth Example"
-export ORIGIN="http://localhost:8000"
-```
+# Set JWT secret (production requirement)
+export JWT_SECRET="your-secure-random-secret-key"
 
-5. **Run the server**:
-```bash
+# Run the server
 uvicorn main:app --reload
 ```
 
-The server will start at `http://localhost:8000`.
+The server starts at `http://localhost:8000`.
 
-6. **View API documentation**:
-Open `http://localhost:8000/docs` in your browser for interactive API docs.
+### Try the Interactive Demo
 
-### Testing & Development
+1. **Open browser**: `http://localhost:8000`
+2. **Register**: Fill form → Click "Register with Biometrics" → Authenticate with TouchID
+3. **View profile**: See your user data and JWT expiration countdown
+4. **Logout and login**: Test the login flow with biometrics
 
-**Reset Database** (to test registration multiple times):
+### View API Documentation
 
-If you need to clear all users and credentials to test registration again:
+FastAPI automatic docs: `http://localhost:8000/docs`
 
-```bash
-# Option 1: Python script only (just clears DB)
-python3 reset_db.py
-
-# Option 2: Shell script (clears DB and restarts server)
-./reset.sh
-```
-
-This is useful when:
-- Testing registration flow multiple times with the same email
-- Clearing test data between development sessions
-- You only have one device with TouchID and want to re-register
-
-Note: The database and logs will be automatically recreated on the next server request.
-
-### Frontend Demo
-
-**NEW!** We now include a fully functional browser-based demo:
-
-1. **Start the server**: `uvicorn main:app --reload`
-2. **Open your browser**: Navigate to `http://localhost:8000`
-3. **Register a new account**:
-   - Fill in the registration form (name, email, date of birth, job title)
-   - Click "Register with Biometrics"
-   - Your browser will prompt for TouchID/FaceID/Windows Hello
-   - Authenticate with your biometric
-   - You'll automatically be logged in and see your profile
-4. **Test login**:
-   - Click "Logout"
-   - Switch to the "Login" tab
-   - Enter your email
-   - Click "Login with Biometrics"
-   - Authenticate again to access your profile
-
-**Features**:
-- ✅ Live JWT expiration countdown
-- ✅ Session management (cleared on tab close)
-- ✅ Real-time status messages
-- ✅ Loading indicators during biometric prompts
-- ✅ Responsive design (mobile & desktop)
-- ✅ Error handling for all scenarios
-
-**Browser Requirements**:
-- Chrome/Edge (recommended)
-- Safari (macOS Big Sur+, iOS 14+)
-- Firefox
-- Requires biometric hardware (TouchID, FaceID, Windows Hello, or security key)
-
-### API Testing
-
-For API-only testing without the frontend:
-- See the `api.http` file for endpoint structure
-- Note: `/register/complete` and `/login/complete` require WebAuthn credentials from browser APIs
-- Use the interactive frontend for actual TouchID testing
+---
 
 ## Database Schema
 
 ### Users Table
 ```sql
 CREATE TABLE users (
-    id TEXT PRIMARY KEY,
-    name TEXT NOT NULL,
-    email TEXT UNIQUE NOT NULL,
-    date_of_birth DATETIME NOT NULL,
-    job_title TEXT NOT NULL,
-    created_at DATETIME NOT NULL
+    id TEXT PRIMARY KEY,                -- UUID
+    first_name TEXT NOT NULL,           -- First name
+    last_name TEXT NOT NULL,            -- Last name
+    email TEXT UNIQUE NOT NULL,         -- Email (indexed for fast lookup)
+    date_of_birth DATETIME NOT NULL,    -- Date of birth
+    job_title TEXT NOT NULL,            -- Job title
+    role TEXT NOT NULL DEFAULT 'user',  -- Role: 'user' or 'admin'
+    created_at DATETIME NOT NULL        -- Registration timestamp
 );
+
+CREATE INDEX idx_users_email ON users(email);
 ```
 
 ### WebAuthn Credentials Table
 ```sql
 CREATE TABLE webauthn_credentials (
-    id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
-    credential_id BLOB UNIQUE NOT NULL,
-    public_key BLOB NOT NULL,
-    sign_count INTEGER NOT NULL DEFAULT 0,
-    created_at DATETIME NOT NULL,
+    id TEXT PRIMARY KEY,                -- UUID
+    user_id TEXT NOT NULL,              -- Foreign key to users.id
+    credential_id BLOB UNIQUE NOT NULL, -- WebAuthn credential ID (binary)
+    public_key BLOB NOT NULL,           -- Public key for signature verification
+    sign_count INTEGER NOT NULL DEFAULT 0, -- Counter for credential cloning detection
+    created_at DATETIME NOT NULL,       -- Credential creation timestamp
     FOREIGN KEY (user_id) REFERENCES users(id)
 );
+
+CREATE INDEX idx_credentials_user_id ON webauthn_credentials(user_id);
+CREATE UNIQUE INDEX idx_credentials_credential_id ON webauthn_credentials(credential_id);
 ```
 
 ### Audit Logs Table
 ```sql
 CREATE TABLE audit_logs (
-    id TEXT PRIMARY KEY,
-    event_type TEXT NOT NULL,         -- Event category (registration_begin, login_complete, etc.)
-    user_email TEXT,                  -- Email address (if known)
-    user_id TEXT,                     -- User ID (if authenticated)
-    ip_address TEXT,                  -- Client IP address
-    user_agent TEXT,                  -- Browser/client user agent
-    success INTEGER NOT NULL,         -- 1 for success, 0 for failure
-    details TEXT,                     -- Additional context or error messages
-    created_at DATETIME NOT NULL,     -- Timestamp of the event
-    FOREIGN KEY (user_id) REFERENCES users(id)
-);
-```
-
-**Indexes:**
-- `event_type` - Fast filtering by event type
-- `user_email` - Quick user activity lookups
-- `created_at` - Chronological queries
-
-## Security Controls
-
-### Implemented Controls
-
-✅ **Authentication**
-- WebAuthn with platform authenticators (TouchID/FaceID)
-- Multi-factor by design (device + biometric)
-- Credential public key cryptography
-- Challenge-response prevents replay attacks
-- Sign count validation prevents credential cloning
-
-✅ **Authorization**
-- JWT token-based access control
-- Token expiration (60 minutes)
-- Authorization checks per endpoint
-- Users can only access own resources
-
-✅ **Input Validation**
-- Pydantic models for all inputs
-- Email format validation
-- Required field validation
-- Type checking
-
-✅ **Database Security**
-- SQL injection prevention (SQLAlchemy ORM)
-- Email uniqueness constraints
-- Foreign key relationships
-- Indexed lookups for performance
-
-✅ **Logging & Monitoring**
-- All authentication attempts logged with IP addresses
-- Authorization failures logged with user context
-- User enumeration protection (generic error messages)
-- Dual logging: file-based (`app.log`) and database (`audit_logs` table)
-- IP address and user agent tracking for all security events
-- Database audit trail for incident response and compliance
-- Queryable audit logs for threat detection
-
-✅ **Error Handling**
-- Generic error messages to prevent information leakage
-- Proper HTTP status codes
-- Challenge cleanup on failures
-
-### Security Controls NOT Implemented
-
-The following controls are deferred due to infrastructure requirements or complexity beyond this exercise scope:
-
-❌ **Rate Limiting**
-- **Why**: Requires Redis or similar distributed cache
-- **Risk**: Brute force attacks possible
-- **Mitigation**: Should implement per-IP and per-email rate limits in production
-- **Recommendation**: Use middleware like `slowapi` with Redis backend
-
-❌ **HTTPS/TLS**
-- **Why**: Local testing uses HTTP
-- **Risk**: Credentials transmitted in clear text
-- **Mitigation**: WebAuthn requires secure context (HTTPS) in production
-- **Recommendation**: Deploy behind reverse proxy (nginx) with Let's Encrypt certificates
-
-❌ **Email Verification**
-- **Why**: Requires email service integration (SendGrid, AWS SES)
-- **Risk**: Users can register with emails they don't own
-- **Mitigation**: None currently
-- **Recommendation**: Send verification email with time-limited token
-
-❌ **Account Recovery Flow**
-- **Why**: Complex multi-step process requiring email service
-- **Risk**: Users who lose device credentials cannot recover access
-- **Mitigation**: None - users must re-register with new email
-- **Recommendation**: Implement recovery codes or backup authentication method
-
-❌ **Distributed Challenge Storage**
-- **Why**: Currently using in-memory dictionary (lost on restart)
-- **Risk**: Server restart invalidates pending registrations/logins
-- **Mitigation**: Acceptable for development
-- **Recommendation**: Use Redis with TTL for production
-
-❌ **Secrets Management**
-- **Why**: Using environment variables with fallback defaults
-- **Risk**: JWT secret could be exposed in source code or logs
-- **Mitigation**: Document that `JWT_SECRET` MUST be set in production
-- **Recommendation**: Use HashiCorp Vault, AWS Secrets Manager, or Azure Key Vault
-
-❌ **Audit Logging Infrastructure**
-- **Why**: Currently logging to local file
-- **Risk**: Logs not centralized, difficult to analyze, can be lost
-- **Mitigation**: File-based logging adequate for development
-- **Recommendation**: Integrate with ELK stack, Splunk, or CloudWatch
-
-❌ **WAF/DDoS Protection**
-- **Why**: Requires infrastructure (CloudFlare, AWS WAF)
-- **Risk**: Application vulnerable to volumetric attacks
-- **Mitigation**: None at application level
-- **Recommendation**: Deploy behind WAF with DDoS protection
-
-❌ **Database Encryption at Rest**
-- **Why**: SQLite doesn't support native encryption
-- **Risk**: Database file contains user PII in plaintext
-- **Mitigation**: File system permissions restrict access
-- **Recommendation**: Use encrypted database (PostgreSQL with encryption) or encrypt filesystem
-
-❌ **JWT Refresh Tokens**
-- **Why**: Adds complexity with token rotation logic
-- **Risk**: Users must re-authenticate every 60 minutes
-- **Mitigation**: Short session timeout is acceptable for high-security apps
-- **Recommendation**: Implement refresh token flow with rotation
-
-❌ **CORS Configuration**
-- **Why**: No specific frontend domain defined
-- **Risk**: Any origin can call the API in browser context
-- **Mitigation**: Accept for development
-- **Recommendation**: Configure specific allowed origins for production
-
-❌ **Input Sanitization for XSS**
-- **Why**: No HTML rendering in this API (JSON only)
-- **Risk**: If used with web frontend, XSS possible
-- **Mitigation**: API returns JSON only
-- **Recommendation**: Frontend should sanitize before rendering
-
-## Logging & Audit Trail
-
-### Application Logging (`app.log`)
-
-All security-relevant events are logged to both console and `app.log`:
-
-- User registration attempts (success/failure)
-- Login attempts (success/failure)
-- JWT validation failures
-- Authorization failures (users accessing others' data)
-- Credential verification failures
-- Database operations
-- **IP addresses** for all authentication and access events
-- **User agents** (browser/client information)
-
-**Log Format**: `YYYY-MM-DD HH:MM:SS [LEVEL] message`
-
-**Example Log Entries:**
-```
-2025-10-22 14:46:29 [INFO] Registration initiated for: user@example.com from IP: 127.0.0.1
-2025-10-22 14:46:33 [INFO] User registered successfully: John Doe (user@example.com), job: Engineer from IP: 127.0.0.1
-2025-10-22 14:46:35 [INFO] User logged in successfully: John Doe (user@example.com) from IP: 127.0.0.1
-```
-
-### Database Audit Trail (`audit_logs` table)
-
-In addition to file logging, all authentication and authorization events are stored in the database for long-term auditing and analysis:
-
-**Schema:**
-```sql
-CREATE TABLE audit_logs (
-    id VARCHAR PRIMARY KEY,
-    event_type VARCHAR NOT NULL,        -- 'registration_begin', 'registration_complete', 'login_begin', 'login_complete', 'user_access'
-    user_email VARCHAR,                 -- Email address if known
-    user_id VARCHAR,                    -- User ID if authenticated
-    ip_address VARCHAR,                 -- Client IP address
+    id TEXT PRIMARY KEY,                -- UUID
+    event_type TEXT NOT NULL,           -- Event category (indexed)
+    user_email TEXT,                    -- Email address (indexed)
+    user_id TEXT,                       -- User ID (foreign key)
+    ip_address TEXT,                    -- Client IP address
     user_agent TEXT,                    -- Browser/client user agent
     success INTEGER NOT NULL,           -- 1 for success, 0 for failure
     details TEXT,                       -- Additional context
-    created_at DATETIME NOT NULL
+    created_at DATETIME NOT NULL,       -- Event timestamp (indexed)
+    FOREIGN KEY (user_id) REFERENCES users(id)
 );
+
+CREATE INDEX idx_audit_event_type ON audit_logs(event_type);
+CREATE INDEX idx_audit_user_email ON audit_logs(user_email);
+CREATE INDEX idx_audit_created_at ON audit_logs(created_at);
 ```
 
-**Querying Audit Logs:**
+**Event Types:**
+- `registration_begin`: User started registration
+- `registration_complete`: User completed registration (success/failure)
+- `login_begin`: User started login
+- `login_complete`: User completed login (success/failure)
+- `user_access`: User accessed `GET /users/{id}` (success/failure)
+
+---
+
+## Configuration
+
+### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `JWT_SECRET` | `your-secret-key-change-in-production` | **⚠️ MUST change in production** - Secret key for signing JWTs |
+| `JWT_ALGORITHM` | `HS256` | Algorithm for JWT signing |
+| `JWT_EXPIRATION_MINUTES` | `60` | Token lifetime in minutes |
+| `RP_ID` | `localhost` | WebAuthn Relying Party ID (your domain) |
+| `RP_NAME` | `Auth Example` | WebAuthn Relying Party display name |
+| `ORIGIN` | `http://localhost:8000` | Expected origin for WebAuthn (must be HTTPS in production) |
+
+### Production Configuration Checklist
+
+- [ ] Set `JWT_SECRET` to cryptographically random value (32+ bytes)
+- [ ] Store `JWT_SECRET` in secret manager (Vault, AWS Secrets Manager)
+- [ ] Set `RP_ID` to your production domain (e.g., `auth.example.com`)
+- [ ] Set `ORIGIN` to HTTPS URL (e.g., `https://auth.example.com`)
+- [ ] Configure TLS termination at reverse proxy
+- [ ] Set up centralized logging (ELK, Splunk, CloudWatch)
+- [ ] Implement rate limiting (Redis + `slowapi` or WAF)
+- [ ] Configure CORS with specific allowed origins
+- [ ] Set up database backups
+- [ ] Enable database encryption at rest
+- [ ] Configure WAF and DDoS protection
+- [ ] Set up monitoring and alerting
+
+---
+
+## Development & Testing
+
+### Reset Database
+
+To test registration multiple times (useful when you only have one device with TouchID):
 
 ```bash
-# View all login attempts for a user
+# Option 1: Python script (clears database and logs)
+python3 reset_db.py
+
+# Option 2: Shell script (clears database, restarts server)
+./reset.sh
+```
+
+This deletes `app.db` and `app.log`, allowing you to re-register with the same email.
+
+### Query Audit Logs
+
+**View all events for a user:**
+```bash
 sqlite3 app.db "SELECT created_at, event_type, ip_address, success, details
                 FROM audit_logs
-                WHERE user_email='user@example.com'
+                WHERE user_email='jane@example.com'
                 ORDER BY created_at DESC;"
+```
 
-# Find failed login attempts
+**Find failed login attempts:**
+```bash
 sqlite3 app.db "SELECT created_at, user_email, ip_address, user_agent, details
                 FROM audit_logs
                 WHERE event_type='login_complete' AND success=0
                 ORDER BY created_at DESC;"
+```
 
-# Detect suspicious activity (multiple IPs for same user)
+**Detect suspicious activity (multiple IPs):**
+```bash
 sqlite3 app.db "SELECT user_email, ip_address, COUNT(*) as attempts
                 FROM audit_logs
-                WHERE event_type='login_complete'
+                WHERE event_type='login_complete' AND success=1
                 GROUP BY user_email, ip_address;"
+```
 
-# View authorization failures
+**View authorization failures:**
+```bash
 sqlite3 app.db "SELECT created_at, user_email, ip_address, details
                 FROM audit_logs
                 WHERE event_type='user_access' AND success=0;"
 ```
 
-**Use Cases:**
-- **Incident Response**: Track when and from where a compromised account was accessed
-- **Threat Detection**: Identify unusual login patterns or brute force attempts
-- **Compliance**: Maintain audit trail for SOC 2, HIPAA, GDPR requirements
-- **User Support**: Help users track their own login history and active sessions
+### Promote User to Admin
 
-## Configuration
+```bash
+sqlite3 app.db "UPDATE users SET role='admin' WHERE email='admin@example.com';"
+```
 
-Environment variables:
+After promoting, the user must **log out and log in again** to receive a new JWT with the `admin` role claim.
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `JWT_SECRET` | `your-secret-key-change-in-production` | Secret key for signing JWTs ⚠️ MUST change in production |
-| `JWT_ALGORITHM` | `HS256` | Algorithm for JWT signing |
-| `JWT_EXPIRATION_MINUTES` | `60` | Token lifetime in minutes |
-| `RP_ID` | `localhost` | WebAuthn Relying Party ID (your domain) |
-| `RP_NAME` | `Auth Example` | WebAuthn Relying Party display name |
-| `ORIGIN` | `http://localhost:8000` | Expected origin for WebAuthn |
+### Test Role-Based Access Control
 
-## Threat Model Considerations
+1. Register two users: `user1@example.com` and `user2@example.com`
+2. Login as `user1@example.com` → Save JWT token
+3. Try to access `user2`'s data with `user1`'s token:
+   ```bash
+   curl -H "Authorization: Bearer <user1-token>" \
+        http://localhost:8000/users/<user2-id>
+   ```
+   **Expected**: `403 Forbidden` + audit log entry
+4. Promote `user1` to admin: `UPDATE users SET role='admin' WHERE email='user1@example.com';`
+5. Login as `user1@example.com` again (to get new JWT with `admin` role)
+6. Try to access `user2`'s data with `user1`'s admin token:
+   ```bash
+   curl -H "Authorization: Bearer <user1-admin-token>" \
+        http://localhost:8000/users/<user2-id>
+   ```
+   **Expected**: `200 OK` + `user2`'s data + audit log entry with `(role: admin)`
 
-This application is designed for a **high-security microservice architecture** with the following assumptions:
-
-1. **Strong Authentication Required**: WebAuthn provides phishing-resistant MFA
-2. **Security Team Monitoring**: Comprehensive logging enables detection of anomalies
-3. **Microservice Architecture**: API-only design (no session cookies)
-4. **Internal Network Deployment**: Some controls (WAF, TLS termination) expected at infrastructure layer
-
-**Key Security Properties**:
-- Resistant to credential stuffing (no passwords)
-- Resistant to phishing (WebAuthn origin binding)
-- Resistant to MITM in credential exchange (challenge-response)
-- Resistant to replay attacks (sign count validation)
-- Defense in depth (authentication + authorization)
+---
 
 ## License
 

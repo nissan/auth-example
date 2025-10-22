@@ -29,8 +29,12 @@
                     <h2>Create Account</h2>
                     <form id="register-form">
                         <div class="form-group">
-                            <label for="reg-name">Full Name</label>
-                            <input type="text" id="reg-name" name="name" required placeholder="Jane Doe">
+                            <label for="reg-first-name">First Name</label>
+                            <input type="text" id="reg-first-name" name="first_name" required placeholder="Jane">
+                        </div>
+                        <div class="form-group">
+                            <label for="reg-last-name">Last Name</label>
+                            <input type="text" id="reg-last-name" name="last_name" required placeholder="Doe">
                         </div>
                         <div class="form-group">
                             <label for="reg-email">Email</label>
@@ -105,6 +109,10 @@
                     <div class="profile-field">
                         <span class="field-label">Job Title:</span>
                         <span id="profile-job" class="field-value">-</span>
+                    </div>
+                    <div class="profile-field">
+                        <span class="field-label">Role:</span>
+                        <span id="profile-role" class="field-value">-</span>
                     </div>
                     <div class="profile-field">
                         <span class="field-label">Member Since:</span>

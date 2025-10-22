@@ -94,7 +94,8 @@ class WebAuthnApp {
         try {
             const formData = new FormData(form);
             const userData = {
-                name: formData.get('name'),
+                first_name: formData.get('first_name'),
+                last_name: formData.get('last_name'),
                 email: formData.get('email'),
                 date_of_birth: formData.get('date_of_birth') + 'T00:00:00Z',
                 job_title: formData.get('job_title')
@@ -105,7 +106,7 @@ class WebAuthnApp {
             // Call WebAuthn registration
             const user = await this.webauthnClient.register(userData);
 
-            this.showSuccess(`Welcome, ${user.name}! Your account has been created.`);
+            this.showSuccess(`Welcome, ${user.first_name} ${user.last_name}! Your account has been created.`);
 
             // For registration, we need to login to get a JWT token
             this.showLoading('Logging you in...');
@@ -156,7 +157,7 @@ class WebAuthnApp {
             this.tokenManager.saveAuth(authResponse.access_token, authResponse.user);
 
             this.hideLoading();
-            this.showSuccess(`Welcome back, ${authResponse.user.name}!`);
+            this.showSuccess(`Welcome back, ${authResponse.user.first_name} ${authResponse.user.last_name}!`);
 
             // Load and display profile
             await this.loadProfile();
@@ -199,10 +200,11 @@ class WebAuthnApp {
      * Display user profile in UI
      */
     displayProfile(user, token) {
-        document.getElementById('profile-name').textContent = user.name;
+        document.getElementById('profile-name').textContent = `${user.first_name} ${user.last_name}`;
         document.getElementById('profile-email').textContent = user.email;
         document.getElementById('profile-dob').textContent = new Date(user.date_of_birth).toLocaleDateString();
         document.getElementById('profile-job').textContent = user.job_title;
+        document.getElementById('profile-role').textContent = user.role || 'user';
         document.getElementById('profile-created').textContent = new Date(user.created_at).toLocaleDateString();
 
         // Display token expiration with countdown

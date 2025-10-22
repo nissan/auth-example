@@ -1,0 +1,26 @@
+We are building the following:
+Create a small backend app that performs user authentication and fetches information. Consider this app is part of a microservice architecture.
+
+The threat model for this application requires strong authentication and authorization. Consider the application needs to be monitored by the Security team as well.
+
+Implement basic security controls on the endpoints.
+
+Create a README file that contains any controls that you haven’t implemented because they would require infrastructure or are too complex to write for this specific exercise. Justify your decisions.
+
+The app should have the following endpoints:
+
+POST /users: Users can self-register on your app
+The user should input the follow information:
+Name
+E-mail
+Date of Birth
+Job title
+How to secure this process is up to you.
+POST /login: Users can login in your app
+Do not use any external service like Auth0 here
+Save users into a DB, sqlite is fine for this exercise.
+Once the user is logged in, generate a JWT token.
+How to secure this process is up to you
+GET /users/{id}: Retrieves user information.
+It should have access control
+It should fetch the user data from the DB
