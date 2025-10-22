@@ -81,25 +81,25 @@ The microservice provides comprehensive monitoring capabilities:
 - Credential verification failures
 
 #### 3. Incident Response Capabilities
-```sql
--- Find failed login attempts (potential brute force)
-SELECT created_at, user_email, ip_address, user_agent, details
+```bash
+# Find failed login attempts (potential brute force)
+sqlite3 -header -column app.db "SELECT created_at, user_email, ip_address, user_agent, details
 FROM audit_logs
 WHERE event_type='login_complete' AND success=0
-ORDER BY created_at DESC;
+ORDER BY created_at DESC;"
 
--- Detect account compromise (multiple IPs for same user)
-SELECT user_email, ip_address, COUNT(*) as attempts
+# Detect account compromise (multiple IPs for same user)
+sqlite3 -header -column app.db "SELECT user_email, ip_address, COUNT(*) as attempts
 FROM audit_logs
 WHERE event_type='login_complete' AND success=1
 GROUP BY user_email, ip_address
-HAVING COUNT(*) > 1;
+HAVING COUNT(*) > 1;"
 
--- Track unauthorized access attempts
-SELECT created_at, user_email, ip_address, details
+# Track unauthorized access attempts
+sqlite3 -header -column app.db "SELECT created_at, user_email, ip_address, details
 FROM audit_logs
 WHERE event_type='user_access' AND success=0
-ORDER BY created_at DESC;
+ORDER BY created_at DESC;"
 ```
 
 #### 4. Compliance Support
