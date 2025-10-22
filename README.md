@@ -682,6 +682,130 @@ FastAPI automatic docs: `http://localhost:8000/docs`
 
 ---
 
+## Complete Testing Guide
+
+### End-to-End Test: Register → Login → Test Protected Endpoint
+
+This guide shows how to register a user with the frontend, obtain a JWT token, and use it to test the protected `GET /users/{id}` endpoint in the FastAPI documentation interface.
+
+#### Step 1: Register a New User
+
+1. **Open the frontend**: Navigate to `http://localhost:8000`
+2. **Fill out the registration form**:
+   - First Name: `Jane`
+   - Last Name: `Doe`
+   - Email: `jane@example.com`
+   - Date of Birth: `1990-01-15`
+   - Job Title: `Software Engineer`
+3. **Click "Register with Biometrics"**
+4. **Authenticate** with TouchID/FaceID when prompted
+5. **Note your user ID**: After registration, you'll be automatically logged in and see your profile. The browser console will show your user ID, or you can find it in the browser's developer tools → Application → Session Storage → `webauthn_user_id`
+
+#### Step 2: Get Your JWT Token
+
+**Option A: From Browser Session Storage**
+1. Open browser developer tools (F12 or right-click → Inspect)
+2. Go to **Application** tab → **Session Storage** → `http://localhost:8000`
+3. Find the key `webauthn_jwt`
+4. Copy the token value (starts with `eyJ...`)
+
+**Option B: From Browser Console**
+1. Open browser console (F12 → Console tab)
+2. Type: `sessionStorage.getItem('webauthn_jwt')`
+3. Copy the token value (without quotes)
+
+**Option C: Login and Extract Token**
+If you've logged out, login again and extract the token:
+1. Click "Login" tab
+2. Enter your email: `jane@example.com`
+3. Click "Login with Biometrics"
+4. Authenticate with TouchID/FaceID
+5. Extract token using Option A or B above
+
+#### Step 3: Test GET /users/{id} in FastAPI Docs
+
+1. **Open API docs**: Navigate to `http://localhost:8000/docs`
+2. **Find GET /users/{id}**: Scroll down to the "Protected Endpoints" section
+3. **Click "Try it out"**
+4. **Authorize with your JWT**:
+   - Click the **"Authorize"** button (lock icon) at the top right
+   - In the "Value" field, paste your JWT token
+   - Click **"Authorize"**
+   - Click **"Close"**
+5. **Test the endpoint**:
+   - Enter your `user_id` in the `user_id` field
+   - Click **"Execute"**
+6. **View the response**:
+   - You should see a `200 OK` response with your user data including:
+     - `id`, `first_name`, `last_name`, `email`, `date_of_birth`, `job_title`, `role`, `created_at`
+
+**Expected Response:**
+```json
+{
+  "id": "your-user-uuid",
+  "first_name": "Jane",
+  "last_name": "Doe",
+  "email": "jane@example.com",
+  "date_of_birth": "1990-01-15T00:00:00",
+  "job_title": "Software Engineer",
+  "role": "user",
+  "created_at": "2025-10-22T12:00:00"
+}
+```
+
+#### Step 4: Test Authorization Failures
+
+**Test 1: Try to access another user's data (should fail)**
+1. Register a second user with a different email
+2. Note the second user's ID
+3. In FastAPI docs, try to GET the second user's ID using the first user's JWT
+4. **Expected**: `403 Forbidden` - "You don't have permission to access this resource"
+
+**Test 2: Test with expired/invalid token**
+1. In FastAPI docs, click "Authorize"
+2. Enter an invalid token (e.g., `invalid-token`)
+3. Try to GET any user ID
+4. **Expected**: `401 Unauthorized` - "Could not validate credentials"
+
+**Test 3: Test without token**
+1. In FastAPI docs, click "Authorize" then "Logout"
+2. Try to GET any user ID
+3. **Expected**: `401 Unauthorized` - "Not authenticated"
+
+#### Step 5: Test Admin Access (Optional)
+
+To test the admin role functionality:
+
+1. **Promote a user to admin**:
+   ```bash
+   sqlite3 app.db "UPDATE users SET role='admin' WHERE email='jane@example.com';"
+   ```
+
+2. **Login again** to get a new JWT with the `admin` role claim:
+   - Logout from the frontend
+   - Login again with TouchID
+   - Extract the new JWT token
+
+3. **Test admin access**:
+   - In FastAPI docs, authorize with the new admin JWT
+   - Try to GET another user's data
+   - **Expected**: `200 OK` with the other user's data (admins can access any user)
+
+4. **Verify audit logs**:
+   ```bash
+   sqlite3 app.db "SELECT created_at, user_email, details FROM audit_logs WHERE event_type='user_access' ORDER BY created_at DESC LIMIT 5;"
+   ```
+   You should see log entries showing the admin accessing other users' data.
+
+#### Quick Reference: Common User IDs
+
+After registration, you can find user IDs in the database:
+```bash
+sqlite3 app.db "SELECT id, email, first_name, last_name, role FROM users;"
+```
+
+---
+
 ## Database Schema
 
 ### Users Table
