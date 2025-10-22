@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a FastAPI-based authentication example application. Currently implements basic user registration and login endpoints with placeholder/dummy implementations. SQLAlchemy is configured but not yet integrated into the endpoints.
+This is a FastAPI-based passwordless authentication microservice implementing WebAuthn (TouchID/biometric) with JWT authorization. Designed for high-security environments with comprehensive logging and access controls.
 
 ## Development Commands
 
@@ -34,29 +34,51 @@ pip install -r requirements.txt
 
 ## Architecture
 
-### Current State
-- **Single-file application**: All code is in `main.py`
-- **Database**: SQLAlchemy configured for SQLite (`app.db`) but not yet connected to endpoints
-- **Endpoints return dummy data**: Both `/users/{user_id}` (GET) and `/login` (POST) return hardcoded responses
-- **No actual authentication**: Login endpoint returns a static JWT token
-- **Logging**: Configured to write to both console and `app.log`
+### Implementation Status: ✅ Complete
 
-### Data Models
-Two Pydantic models exist:
-- `UserCreateModel`: For registration (includes password)
-- `UserViewModel`: For responses (excludes password)
+- **Single-file application**: All code in `main.py` (613 lines)
+- **Database**: SQLite with two tables (users, webauthn_credentials)
+- **Authentication**: WebAuthn passwordless authentication with TouchID/FaceID
+- **Authorization**: JWT tokens with 60-minute expiration
+- **Logging**: All security events logged to console and `app.log`
 
-### Database Configuration
-- SQLAlchemy Base, engine, and session factory configured at top of `main.py`
-- `get_db()` dependency function exists but is not yet used in endpoints
-- No SQLAlchemy models defined yet (Base is unused)
+### Key Components
 
-### Key Implementation Gaps
-The codebase is in an early stage. To make this production-ready:
-1. Define SQLAlchemy User model and create tables
-2. Implement actual user creation in the database (POST /users)
-3. Implement password hashing (bcrypt/passlib)
-4. Implement actual authentication logic in /login endpoint
-5. Add JWT token generation and validation
-6. Use the `get_db()` dependency in endpoints
-7. Implement actual user lookup in GET /users/{user_id}
+**Database Models** (SQLAlchemy):
+- `User`: Stores user profile (name, email, DOB, job_title)
+- `WebAuthnCredential`: Stores public keys and credential metadata
+
+**Pydantic Models**:
+- `UserRegistrationRequest`: Registration input
+- `UserViewModel`: User data response
+- `RegistrationCompleteRequest`: WebAuthn credential submission
+- `LoginBeginRequest`: Login initiation
+- `LoginCompleteRequest`: WebAuthn assertion submission
+
+**Authentication Flow**:
+- `POST /register/begin` → Generate WebAuthn challenge
+- `POST /register/complete` → Verify credential, create user
+- `POST /login/begin` → Generate auth challenge
+- `POST /login/complete` → Verify assertion, return JWT
+- `GET /users/{id}` → Protected endpoint with JWT auth
+
+**JWT Utilities**:
+- `create_access_token()`: Generate signed tokens
+- `verify_access_token()`: Validate and decode tokens
+- `get_current_user()`: FastAPI dependency for auth
+
+**Security Features**:
+- Challenge-response prevents replay attacks
+- Sign count validation prevents credential cloning
+- Authorization checks (users access only own data)
+- Generic error messages prevent user enumeration
+- Comprehensive logging for security monitoring
+
+### Important: WebAuthn Testing
+
+WebAuthn requires browser APIs and **cannot be tested with curl/Postman**. To test:
+1. Create HTML frontend with JavaScript
+2. Use `navigator.credentials.create()` for registration
+3. Use `navigator.credentials.get()` for authentication
+
+See `README.md` section "Testing" for details.
