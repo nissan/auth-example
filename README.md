@@ -388,6 +388,27 @@ CREATE TABLE webauthn_credentials (
 );
 ```
 
+### Audit Logs Table
+```sql
+CREATE TABLE audit_logs (
+    id TEXT PRIMARY KEY,
+    event_type TEXT NOT NULL,         -- Event category (registration_begin, login_complete, etc.)
+    user_email TEXT,                  -- Email address (if known)
+    user_id TEXT,                     -- User ID (if authenticated)
+    ip_address TEXT,                  -- Client IP address
+    user_agent TEXT,                  -- Browser/client user agent
+    success INTEGER NOT NULL,         -- 1 for success, 0 for failure
+    details TEXT,                     -- Additional context or error messages
+    created_at DATETIME NOT NULL,     -- Timestamp of the event
+    FOREIGN KEY (user_id) REFERENCES users(id)
+);
+```
+
+**Indexes:**
+- `event_type` - Fast filtering by event type
+- `user_email` - Quick user activity lookups
+- `created_at` - Chronological queries
+
 ## Security Controls
 
 ### Implemented Controls
@@ -418,10 +439,13 @@ CREATE TABLE webauthn_credentials (
 - Indexed lookups for performance
 
 ✅ **Logging & Monitoring**
-- All authentication attempts logged
-- Authorization failures logged
+- All authentication attempts logged with IP addresses
+- Authorization failures logged with user context
 - User enumeration protection (generic error messages)
-- Audit trail in `app.log`
+- Dual logging: file-based (`app.log`) and database (`audit_logs` table)
+- IP address and user agent tracking for all security events
+- Database audit trail for incident response and compliance
+- Queryable audit logs for threat detection
 
 ✅ **Error Handling**
 - Generic error messages to prevent information leakage
@@ -504,7 +528,9 @@ The following controls are deferred due to infrastructure requirements or comple
 - **Mitigation**: API returns JSON only
 - **Recommendation**: Frontend should sanitize before rendering
 
-## Logging
+## Logging & Audit Trail
+
+### Application Logging (`app.log`)
 
 All security-relevant events are logged to both console and `app.log`:
 
@@ -514,8 +540,69 @@ All security-relevant events are logged to both console and `app.log`:
 - Authorization failures (users accessing others' data)
 - Credential verification failures
 - Database operations
+- **IP addresses** for all authentication and access events
+- **User agents** (browser/client information)
 
 **Log Format**: `YYYY-MM-DD HH:MM:SS [LEVEL] message`
+
+**Example Log Entries:**
+```
+2025-10-22 14:46:29 [INFO] Registration initiated for: user@example.com from IP: 127.0.0.1
+2025-10-22 14:46:33 [INFO] User registered successfully: John Doe (user@example.com), job: Engineer from IP: 127.0.0.1
+2025-10-22 14:46:35 [INFO] User logged in successfully: John Doe (user@example.com) from IP: 127.0.0.1
+```
+
+### Database Audit Trail (`audit_logs` table)
+
+In addition to file logging, all authentication and authorization events are stored in the database for long-term auditing and analysis:
+
+**Schema:**
+```sql
+CREATE TABLE audit_logs (
+    id VARCHAR PRIMARY KEY,
+    event_type VARCHAR NOT NULL,        -- 'registration_begin', 'registration_complete', 'login_begin', 'login_complete', 'user_access'
+    user_email VARCHAR,                 -- Email address if known
+    user_id VARCHAR,                    -- User ID if authenticated
+    ip_address VARCHAR,                 -- Client IP address
+    user_agent TEXT,                    -- Browser/client user agent
+    success INTEGER NOT NULL,           -- 1 for success, 0 for failure
+    details TEXT,                       -- Additional context
+    created_at DATETIME NOT NULL
+);
+```
+
+**Querying Audit Logs:**
+
+```bash
+# View all login attempts for a user
+sqlite3 app.db "SELECT created_at, event_type, ip_address, success, details
+                FROM audit_logs
+                WHERE user_email='user@example.com'
+                ORDER BY created_at DESC;"
+
+# Find failed login attempts
+sqlite3 app.db "SELECT created_at, user_email, ip_address, user_agent, details
+                FROM audit_logs
+                WHERE event_type='login_complete' AND success=0
+                ORDER BY created_at DESC;"
+
+# Detect suspicious activity (multiple IPs for same user)
+sqlite3 app.db "SELECT user_email, ip_address, COUNT(*) as attempts
+                FROM audit_logs
+                WHERE event_type='login_complete'
+                GROUP BY user_email, ip_address;"
+
+# View authorization failures
+sqlite3 app.db "SELECT created_at, user_email, ip_address, details
+                FROM audit_logs
+                WHERE event_type='user_access' AND success=0;"
+```
+
+**Use Cases:**
+- **Incident Response**: Track when and from where a compromised account was accessed
+- **Threat Detection**: Identify unusual login patterns or brute force attempts
+- **Compliance**: Maintain audit trail for SOC 2, HIPAA, GDPR requirements
+- **User Support**: Help users track their own login history and active sessions
 
 ## Configuration
 

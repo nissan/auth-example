@@ -1,5 +1,5 @@
 from typing import Union, Optional
-from fastapi import FastAPI, status, Body, Depends, HTTPException
+from fastapi import FastAPI, status, Body, Depends, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -58,6 +58,23 @@ class WebAuthnCredential(Base):
     # Relationship to user
     user = relationship("User", back_populates="credentials")
 
+class AuditLog(Base):
+    """Audit log for tracking authentication and authorization events"""
+    __tablename__ = "audit_logs"
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    event_type = Column(String, nullable=False, index=True)  # e.g., 'registration', 'login', 'access'
+    user_email = Column(String, nullable=True, index=True)  # Email if known
+    user_id = Column(String, ForeignKey("users.id"), nullable=True)  # User ID if authenticated
+    ip_address = Column(String, nullable=True)
+    user_agent = Column(Text, nullable=True)
+    success = Column(Integer, nullable=False)  # 1 for success, 0 for failure
+    details = Column(Text, nullable=True)  # Additional context (e.g., error messages)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+
+    # Relationship to user (optional, for successful events)
+    user = relationship("User", foreign_keys=[user_id])
+
 
 #---------------------------------------------------------------------
 # Configure logging once at startup
@@ -103,6 +120,53 @@ app.add_middleware(
 static_dir = Path(__file__).parent / "static"
 if static_dir.exists():
     app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+
+# ===================== Utility Functions ===========================
+def get_client_ip(request: Request) -> str:
+    """Extract client IP address from request, handling proxies."""
+    # Check X-Forwarded-For header (set by proxies/load balancers)
+    forwarded_for = request.headers.get("X-Forwarded-For")
+    if forwarded_for:
+        # X-Forwarded-For can contain multiple IPs, take the first one
+        return forwarded_for.split(",")[0].strip()
+
+    # Check X-Real-IP header (alternative proxy header)
+    real_ip = request.headers.get("X-Real-IP")
+    if real_ip:
+        return real_ip.strip()
+
+    # Fall back to direct client IP
+    if request.client:
+        return request.client.host
+
+    return "unknown"
+
+def get_user_agent(request: Request) -> str:
+    """Extract user agent from request headers."""
+    return request.headers.get("User-Agent", "unknown")
+
+def create_audit_log(
+    db: Session,
+    event_type: str,
+    user_email: Optional[str] = None,
+    user_id: Optional[str] = None,
+    ip_address: Optional[str] = None,
+    user_agent: Optional[str] = None,
+    success: bool = True,
+    details: Optional[str] = None
+):
+    """Create an audit log entry."""
+    audit_entry = AuditLog(
+        event_type=event_type,
+        user_email=user_email,
+        user_id=user_id,
+        ip_address=ip_address,
+        user_agent=user_agent,
+        success=1 if success else 0,
+        details=details
+    )
+    db.add(audit_entry)
+    db.commit()
 
 # Create database tables on startup
 @app.on_event("startup")
@@ -257,7 +321,8 @@ class LoginCompleteRequest(BaseModel):
 # ===================== WebAuthn Registration Endpoints ===========================
 @app.post("/register/begin")
 def register_begin(
-    request: UserRegistrationRequest,
+    user_data: UserRegistrationRequest,
+    http_request: Request,
     db: Session = Depends(get_db)
 ):
     """
@@ -269,10 +334,24 @@ def register_begin(
     3. Stores the challenge temporarily for verification
     4. Returns options for the browser to create a credential
     """
+    # Extract IP and user agent for audit logging
+    ip_address = get_client_ip(http_request)
+    user_agent = get_user_agent(http_request)
+
     # Check if user already exists
-    existing_user = db.query(User).filter(User.email == request.email).first()
+    existing_user = db.query(User).filter(User.email == user_data.email).first()
     if existing_user:
-        logger.warning(f"Registration attempt with existing email: {request.email}")
+        logger.warning(f"Registration attempt with existing email: {user_data.email} from IP: {ip_address}")
+        # Log failed registration attempt
+        create_audit_log(
+            db=db,
+            event_type="registration_begin",
+            user_email=user_data.email,
+            ip_address=ip_address,
+            user_agent=user_agent,
+            success=False,
+            details="Email already registered"
+        )
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="User with this email already exists"
@@ -295,8 +374,8 @@ def register_begin(
         rp_id=RP_ID,
         rp_name=RP_NAME,
         user_id=user_id_bytes,
-        user_name=request.email,
-        user_display_name=request.name,
+        user_name=user_data.email,
+        user_display_name=user_data.name,
         authenticator_selection=AuthenticatorSelectionCriteria(
             authenticator_attachment=AuthenticatorAttachment.PLATFORM,  # TouchID
             user_verification=UserVerificationRequirement.REQUIRED
@@ -304,16 +383,27 @@ def register_begin(
     )
 
     # Store challenge and user info temporarily (indexed by email)
-    registration_challenges[request.email] = {
+    registration_challenges[user_data.email] = {
         "challenge": options.challenge,
         "user_id": user_id,
-        "name": request.name,
-        "email": request.email,
-        "date_of_birth": request.date_of_birth,
-        "job_title": request.job_title
+        "name": user_data.name,
+        "email": user_data.email,
+        "date_of_birth": user_data.date_of_birth,
+        "job_title": user_data.job_title
     }
 
-    logger.info(f"Registration initiated for: {request.email}")
+    # Log successful registration initiation
+    create_audit_log(
+        db=db,
+        event_type="registration_begin",
+        user_email=user_data.email,
+        ip_address=ip_address,
+        user_agent=user_agent,
+        success=True,
+        details=f"Registration challenge created for {user_data.name}"
+    )
+
+    logger.info(f"Registration initiated for: {user_data.email} from IP: {ip_address}")
 
     # Return options as JSON for the browser
     return {
@@ -338,7 +428,8 @@ def register_begin(
 
 @app.post("/register/complete", response_model=UserViewModel, status_code=status.HTTP_201_CREATED)
 def register_complete(
-    request: RegistrationCompleteRequest,
+    reg_data: RegistrationCompleteRequest,
+    http_request: Request,
     db: Session = Depends(get_db)
 ):
     """
@@ -350,15 +441,28 @@ def register_complete(
     3. Creates the user in the database
     4. Stores the public key for future authentication
     """
+    # Extract IP and user agent for audit logging
+    ip_address = get_client_ip(http_request)
+    user_agent = get_user_agent(http_request)
+
     # Get the stored challenge
-    if request.email not in registration_challenges:
-        logger.error(f"No registration challenge found for: {request.email}")
+    if reg_data.email not in registration_challenges:
+        logger.error(f"No registration challenge found for: {reg_data.email}")
+        create_audit_log(
+            db=db,
+            event_type="registration_complete",
+            user_email=reg_data.email,
+            ip_address=ip_address,
+            user_agent=user_agent,
+            success=False,
+            details="No registration challenge found"
+        )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="No registration in progress for this email"
         )
 
-    stored_data = registration_challenges[request.email]
+    stored_data = registration_challenges[reg_data.email]
 
     from webauthn import verify_registration_response
     from webauthn.helpers import base64url_to_bytes
@@ -366,7 +470,7 @@ def register_complete(
     try:
         # Verify the registration response
         verification = verify_registration_response(
-            credential=request.credential,
+            credential=reg_data.credential,
             expected_challenge=stored_data["challenge"],
             expected_rp_id=RP_ID,
             expected_origin=ORIGIN
@@ -395,9 +499,21 @@ def register_complete(
         db.refresh(user)
 
         # Clean up the challenge
-        del registration_challenges[request.email]
+        del registration_challenges[reg_data.email]
 
-        logger.info(f"User registered successfully: {user.name} ({user.email}), job: {user.job_title}")
+        # Log successful registration
+        create_audit_log(
+            db=db,
+            event_type="registration_complete",
+            user_email=user.email,
+            user_id=user.id,
+            ip_address=ip_address,
+            user_agent=user_agent,
+            success=True,
+            details=f"User {user.name} registered successfully"
+        )
+
+        logger.info(f"User registered successfully: {user.name} ({user.email}), job: {user.job_title} from IP: {ip_address}")
 
         return UserViewModel(
             id=user.id,
@@ -409,10 +525,20 @@ def register_complete(
         )
 
     except Exception as e:
-        logger.error(f"Registration verification failed for {request.email}: {str(e)}")
+        logger.error(f"Registration verification failed for {reg_data.email}: {str(e)}")
+        # Log failed registration
+        create_audit_log(
+            db=db,
+            event_type="registration_complete",
+            user_email=reg_data.email,
+            ip_address=ip_address,
+            user_agent=user_agent,
+            success=False,
+            details=f"Verification failed: {str(e)}"
+        )
         # Clean up the challenge on failure
-        if request.email in registration_challenges:
-            del registration_challenges[request.email]
+        if reg_data.email in registration_challenges:
+            del registration_challenges[reg_data.email]
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Registration verification failed: {str(e)}"
@@ -422,7 +548,8 @@ def register_complete(
 # ===================== WebAuthn Login Endpoints ===========================
 @app.post("/login/begin")
 def login_begin(
-    request: LoginBeginRequest,
+    login_data: LoginBeginRequest,
+    http_request: Request,
     db: Session = Depends(get_db)
 ):
     """
@@ -434,10 +561,24 @@ def login_begin(
     3. Generates authentication options (challenge)
     4. Returns options for the browser to sign
     """
+    # Extract IP and user agent for audit logging
+    ip_address = get_client_ip(http_request)
+    user_agent = get_user_agent(http_request)
+
     # Find user by email
-    user = db.query(User).filter(User.email == request.email).first()
+    user = db.query(User).filter(User.email == login_data.email).first()
     if not user:
-        logger.warning(f"Login attempt for non-existent user: {request.email}")
+        logger.warning(f"Login attempt for non-existent user: {login_data.email} from IP: {ip_address}")
+        # Log failed login attempt
+        create_audit_log(
+            db=db,
+            event_type="login_begin",
+            user_email=login_data.email,
+            ip_address=ip_address,
+            user_agent=user_agent,
+            success=False,
+            details="User not found"
+        )
         # Don't reveal whether user exists (return generic error)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -450,7 +591,17 @@ def login_begin(
     ).all()
 
     if not credentials:
-        logger.error(f"User {request.email} has no WebAuthn credentials")
+        logger.error(f"User {login_data.email} has no WebAuthn credentials from IP: {ip_address}")
+        create_audit_log(
+            db=db,
+            event_type="login_begin",
+            user_email=login_data.email,
+            user_id=user.id,
+            ip_address=ip_address,
+            user_agent=user_agent,
+            success=False,
+            details="No WebAuthn credentials found"
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid credentials"
@@ -471,12 +622,24 @@ def login_begin(
     )
 
     # Store challenge temporarily
-    authentication_challenges[request.email] = {
+    authentication_challenges[login_data.email] = {
         "challenge": options.challenge,
         "user_id": user.id
     }
 
-    logger.info(f"Login initiated for: {request.email}")
+    # Log successful login initiation
+    create_audit_log(
+        db=db,
+        event_type="login_begin",
+        user_email=login_data.email,
+        user_id=user.id,
+        ip_address=ip_address,
+        user_agent=user_agent,
+        success=True,
+        details=f"Authentication challenge created for {user.name}"
+    )
+
+    logger.info(f"Login initiated for: {login_data.email} from IP: {ip_address}")
 
     # Return options as JSON for the browser
     return {
@@ -497,7 +660,8 @@ def login_begin(
 
 @app.post("/login/complete")
 def login_complete(
-    request: LoginCompleteRequest,
+    auth_data: LoginCompleteRequest,
+    http_request: Request,
     db: Session = Depends(get_db)
 ):
     """
@@ -509,22 +673,35 @@ def login_complete(
     3. Updates the sign count to prevent replay attacks
     4. Generates and returns a JWT token
     """
+    # Extract IP and user agent for audit logging
+    ip_address = get_client_ip(http_request)
+    user_agent = get_user_agent(http_request)
+
     # Get the stored challenge
-    if request.email not in authentication_challenges:
-        logger.error(f"No authentication challenge found for: {request.email}")
+    if auth_data.email not in authentication_challenges:
+        logger.error(f"No authentication challenge found for: {auth_data.email}")
+        create_audit_log(
+            db=db,
+            event_type="login_complete",
+            user_email=auth_data.email,
+            ip_address=ip_address,
+            user_agent=user_agent,
+            success=False,
+            details="No authentication challenge found"
+        )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="No login in progress for this email"
         )
 
-    stored_data = authentication_challenges[request.email]
+    stored_data = authentication_challenges[auth_data.email]
 
     from webauthn import verify_authentication_response
     from webauthn.helpers import base64url_to_bytes
 
     try:
         # Get the credential from assertion
-        credential_id = base64url_to_bytes(request.assertion.get("id", ""))
+        credential_id = base64url_to_bytes(auth_data.assertion.get("id", ""))
 
         # Find the credential in database
         credential = db.query(WebAuthnCredential).filter(
@@ -533,7 +710,16 @@ def login_complete(
         ).first()
 
         if not credential:
-            logger.error(f"Credential not found for user: {request.email}")
+            logger.error(f"Credential not found for user: {auth_data.email} from IP: {ip_address}")
+            create_audit_log(
+                db=db,
+                event_type="login_complete",
+                user_email=auth_data.email,
+                ip_address=ip_address,
+                user_agent=user_agent,
+                success=False,
+                details="Credential not found"
+            )
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid credentials"
@@ -541,7 +727,7 @@ def login_complete(
 
         # Verify the authentication response
         verification = verify_authentication_response(
-            credential=request.assertion,
+            credential=auth_data.assertion,
             expected_challenge=stored_data["challenge"],
             expected_rp_id=RP_ID,
             expected_origin=ORIGIN,
@@ -566,9 +752,21 @@ def login_complete(
         )
 
         # Clean up the challenge
-        del authentication_challenges[request.email]
+        del authentication_challenges[auth_data.email]
 
-        logger.info(f"User logged in successfully: {user.name} ({user.email})")
+        # Log successful login
+        create_audit_log(
+            db=db,
+            event_type="login_complete",
+            user_email=user.email,
+            user_id=user.id,
+            ip_address=ip_address,
+            user_agent=user_agent,
+            success=True,
+            details=f"User {user.name} logged in successfully"
+        )
+
+        logger.info(f"User logged in successfully: {user.name} ({user.email}) from IP: {ip_address}")
 
         return {
             "access_token": token,
@@ -581,10 +779,20 @@ def login_complete(
         }
 
     except Exception as e:
-        logger.error(f"Authentication verification failed for {request.email}: {str(e)}")
+        logger.error(f"Authentication verification failed for {auth_data.email}: {str(e)}")
+        # Log failed login
+        create_audit_log(
+            db=db,
+            event_type="login_complete",
+            user_email=auth_data.email,
+            ip_address=ip_address,
+            user_agent=user_agent,
+            success=False,
+            details=f"Authentication failed: {str(e)}"
+        )
         # Clean up the challenge on failure
-        if request.email in authentication_challenges:
-            del authentication_challenges[request.email]
+        if auth_data.email in authentication_challenges:
+            del authentication_challenges[auth_data.email]
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=f"Authentication failed: {str(e)}"
@@ -595,6 +803,7 @@ def login_complete(
 @app.get("/users/{user_id}", response_model=UserViewModel)
 def get_user(
     user_id: str,
+    http_request: Request,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ) -> UserViewModel:
@@ -606,6 +815,7 @@ def get_user(
 
     Args:
         user_id: The ID of the user to retrieve
+        http_request: The HTTP request for IP logging
         current_user: The authenticated user (from JWT token)
         db: Database session
 
@@ -615,11 +825,26 @@ def get_user(
     Raises:
         HTTPException: If user tries to access another user's data or user not found
     """
+    # Extract IP and user agent for audit logging
+    ip_address = get_client_ip(http_request)
+    user_agent = get_user_agent(http_request)
+
     # Authorization: Users can only view their own profile
     if current_user.id != user_id:
         logger.warning(
             f"Authorization failed: User {current_user.email} attempted to access "
-            f"user {user_id}'s data"
+            f"user {user_id}'s data from IP: {ip_address}"
+        )
+        # Log authorization failure
+        create_audit_log(
+            db=db,
+            event_type="user_access",
+            user_email=current_user.email,
+            user_id=current_user.id,
+            ip_address=ip_address,
+            user_agent=user_agent,
+            success=False,
+            details=f"Attempted to access user {user_id}'s data"
         )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -630,12 +855,34 @@ def get_user(
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         logger.error(f"User not found: {user_id}")
+        create_audit_log(
+            db=db,
+            event_type="user_access",
+            user_email=current_user.email,
+            user_id=current_user.id,
+            ip_address=ip_address,
+            user_agent=user_agent,
+            success=False,
+            details=f"User {user_id} not found"
+        )
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="User not found"
         )
 
-    logger.info(f"User data accessed: {user.email}")
+    # Log successful access
+    create_audit_log(
+        db=db,
+        event_type="user_access",
+        user_email=user.email,
+        user_id=user.id,
+        ip_address=ip_address,
+        user_agent=user_agent,
+        success=True,
+        details=f"User {user.name} accessed their profile"
+    )
+
+    logger.info(f"User data accessed: {user.email} from IP: {ip_address}")
 
     return UserViewModel(
         id=user.id,
