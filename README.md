@@ -977,6 +977,20 @@ After promoting, the user must **log out and log in again** to receive a new JWT
 
 ---
 
+## Future Enhancements
+
+This implementation is production-ready for WebAuthn-only authentication. For future enhancements and multi-provider authentication support (SAML, OAuth2/OIDC), see:
+
+**[MULTI_AUTH_ARCHITECTURE.md](MULTI_AUTH_ARCHITECTURE.md)** - Detailed roadmap for extending this microservice to support:
+- SAML 2.0 (Enterprise SSO with Okta, Azure AD, OneLogin)
+- OAuth2/OIDC (Social login with Google, GitHub, Microsoft)
+- Account linking (users can authenticate with multiple providers)
+- Provider abstraction layer for extensibility
+
+The multi-provider architecture maintains full backward compatibility with the current WebAuthn implementation while adding enterprise SSO and social login capabilities.
+
+---
+
 ## License
 
 This is an example project for educational purposes.

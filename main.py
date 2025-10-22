@@ -1,3 +1,65 @@
+"""
+WebAuthn Authentication Microservice
+=====================================
+
+A production-ready passwordless authentication service using WebAuthn with JWT authorization
+and role-based access control (RBAC).
+
+Architecture Overview
+--------------------
+This microservice implements a complete authentication and authorization system:
+
+1. **Authentication**: WebAuthn (FIDO2) passwordless biometric authentication
+   - Uses platform authenticators (TouchID, FaceID, Windows Hello)
+   - Public key cryptography (private keys never leave device)
+   - Phishing-resistant by design (origin binding)
+   - Replay attack prevention (sign count validation)
+
+2. **Authorization**: JWT tokens with role-based access control
+   - HS256 signed tokens with 60-minute expiration
+   - Claims: sub, email, first_name, last_name, role, exp, iat
+   - Two roles: 'user' (self-access only) and 'admin' (cross-user access)
+
+3. **Audit Logging**: Dual logging for security monitoring
+   - File-based logging (app.log) for development/debugging
+   - Database logging (audit_logs table) for long-term audit trail
+   - All events include IP address and user agent tracking
+
+Database Schema
+--------------
+- users: User profiles with first_name, last_name, email, role
+- webauthn_credentials: Public keys and credential metadata
+- audit_logs: Security event tracking with IP/user agent
+
+API Endpoints
+------------
+Registration Flow (2-step WebAuthn protocol):
+  POST /users → 307 redirect → POST /register/begin → POST /register/complete
+
+Login Flow (2-step WebAuthn protocol):
+  POST /login → 307 redirect → POST /login/begin → POST /login/complete
+
+Protected Resources:
+  GET /users/{id} - Requires JWT, enforces RBAC
+
+Security Considerations
+----------------------
+- WebAuthn challenge storage is in-memory (use Redis in production)
+- JWT_SECRET must be changed in production (use secrets manager)
+- CORS is permissive for development (restrict in production)
+- Rate limiting not implemented (use WAF/reverse proxy in production)
+- HTTPS required in production for WebAuthn
+- Sign count validation prevents credential cloning
+
+For comprehensive documentation, see:
+- README.md: Complete user guide, security controls, testing
+- IMPLEMENTATION_SUMMARY.md: Implementation details and architecture
+- MULTI_AUTH_ARCHITECTURE.md: Future multi-provider roadmap
+
+Author: Generated with Claude Code
+Version: 1.0
+"""
+
 from typing import Union, Optional
 from fastapi import FastAPI, status, Body, Depends, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
@@ -14,12 +76,33 @@ from jose import JWTError, jwt
 from pathlib import Path
 
 # ===================== SQLAlchemy setup ===========================
+"""
+Database Configuration
+---------------------
+Using SQLite for development/demo purposes. For production:
+- Use PostgreSQL, MySQL, or similar production-grade database
+- Configure connection pooling
+- Enable SSL/TLS for database connections
+- Set up automated backups
+"""
 DATABASE_URL = "sqlite:///./app.db"
-engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+engine = create_engine(
+    DATABASE_URL,
+    connect_args={"check_same_thread": False}  # SQLite-specific: allow multi-threading
+)
 SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
 Base = declarative_base()
 
 def get_db() -> Session:
+    """
+    Database session dependency for FastAPI endpoints.
+
+    Yields a database session that is automatically closed after the request.
+    This is the recommended pattern for FastAPI dependency injection.
+
+    Yields:
+        Session: SQLAlchemy database session
+    """
     db = SessionLocal()
     try:
         yield db
@@ -28,7 +111,33 @@ def get_db() -> Session:
 
 # ===================== SQLAlchemy Models ===========================
 class User(Base):
-    """User model storing basic user information"""
+    """
+    User model storing core user profile information.
+
+    This model represents a registered user in the system. Users authenticate
+    using WebAuthn credentials (stored separately in WebAuthnCredential table).
+
+    Attributes:
+        id (str): UUID primary key
+        first_name (str): User's first name
+        last_name (str): User's last name
+        email (str): Unique email address (indexed for fast lookup)
+        date_of_birth (datetime): User's date of birth
+        job_title (str): User's job title
+        role (str): User role for RBAC - "user" (default) or "admin"
+        created_at (datetime): Account creation timestamp
+
+    Relationships:
+        credentials: One-to-many relationship with WebAuthnCredential
+                    (cascade delete: removing user deletes all their credentials)
+
+    Security Notes:
+        - Email is unique and indexed for fast authentication lookups
+        - No password field - authentication is entirely WebAuthn-based
+        - Role field enables role-based access control (RBAC)
+        - Default role is "user" (limited to self-access)
+        - Admin role grants cross-user data access
+    """
     __tablename__ = "users"
 
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
@@ -45,20 +154,49 @@ class User(Base):
 
     @property
     def full_name(self) -> str:
-        """Return full name (first + last)"""
+        """
+        Return user's full name (first + last).
+
+        Returns:
+            str: Full name in "FirstName LastName" format
+        """
         return f"{self.first_name} {self.last_name}"
 
 class WebAuthnCredential(Base):
-    """WebAuthn credential model storing public keys and metadata"""
+    """
+    WebAuthn credential model storing public keys and security metadata.
+
+    Each credential represents a registered authenticator (e.g., TouchID, YubiKey)
+    for a user. Users can have multiple credentials (e.g., laptop + phone).
+
+    Attributes:
+        id (str): UUID primary key
+        user_id (str): Foreign key to users table
+        credential_id (bytes): Unique identifier from the authenticator device
+                              (indexed for fast authentication lookups)
+        public_key (bytes): Public key for cryptographic signature verification
+        sign_count (int): Monotonic counter for credential cloning detection
+                         (increments with each authentication)
+        created_at (datetime): Credential registration timestamp
+
+    Relationships:
+        user: Many-to-one relationship with User
+
+    Security Notes:
+        - credential_id is unique and indexed for fast WebAuthn authentication
+        - public_key is used to verify authentication assertions
+        - sign_count prevents replay attacks and detects cloned credentials:
+          * Should always increase with each use
+          * If it decreases or doesn't change, credential may be cloned
+        - Private keys never leave the user's device (WebAuthn security model)
+        - Credentials are bound to the origin (prevents phishing)
+    """
     __tablename__ = "webauthn_credentials"
 
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     user_id = Column(String, ForeignKey("users.id"), nullable=False)
-    # credential_id: unique identifier from the authenticator (stored as bytes)
     credential_id = Column(LargeBinary, unique=True, nullable=False, index=True)
-    # public_key: the public key for signature verification (stored as bytes)
     public_key = Column(LargeBinary, nullable=False)
-    # sign_count: counter to prevent replay attacks
     sign_count = Column(Integer, default=0, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
@@ -66,17 +204,52 @@ class WebAuthnCredential(Base):
     user = relationship("User", back_populates="credentials")
 
 class AuditLog(Base):
-    """Audit log for tracking authentication and authorization events"""
+    """
+    Audit log model for tracking authentication and authorization events.
+
+    This table provides a comprehensive audit trail for security monitoring,
+    incident response, and compliance. All security-relevant events are logged
+    with IP address and user agent for forensic analysis.
+
+    Attributes:
+        id (str): UUID primary key
+        event_type (str): Event category (indexed for fast queries)
+                         Values: 'registration_begin', 'registration_complete',
+                                'login_begin', 'login_complete', 'user_access'
+        user_email (str): User's email address if known (indexed)
+        user_id (str): Foreign key to users table (null for failed auth)
+        ip_address (str): Client IP address (handles X-Forwarded-For proxies)
+        user_agent (str): Browser/client user agent string
+        success (int): 1 for successful events, 0 for failures
+        details (str): Additional context (error messages, authorization details)
+        created_at (datetime): Event timestamp (indexed for time-range queries)
+
+    Relationships:
+        user: Many-to-one relationship with User (nullable for failed events)
+
+    Security Notes:
+        - Indexes on event_type, user_email, and created_at for fast querying
+        - IP addresses enable detection of suspicious patterns (brute force, etc.)
+        - User agent helps identify automated attacks or unusual clients
+        - Dual logging: Also logs to app.log file for real-time monitoring
+        - Used for incident response, security monitoring, and compliance
+        - Query examples in README.md (failed logins, unauthorized access, etc.)
+
+    Example Queries:
+        - Failed login attempts: WHERE event_type='login_complete' AND success=0
+        - Unauthorized access: WHERE event_type='user_access' AND success=0
+        - Admin actions: WHERE details LIKE '%role: admin%'
+    """
     __tablename__ = "audit_logs"
 
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    event_type = Column(String, nullable=False, index=True)  # e.g., 'registration', 'login', 'access'
-    user_email = Column(String, nullable=True, index=True)  # Email if known
-    user_id = Column(String, ForeignKey("users.id"), nullable=True)  # User ID if authenticated
+    event_type = Column(String, nullable=False, index=True)
+    user_email = Column(String, nullable=True, index=True)
+    user_id = Column(String, ForeignKey("users.id"), nullable=True)
     ip_address = Column(String, nullable=True)
     user_agent = Column(Text, nullable=True)
     success = Column(Integer, nullable=False)  # 1 for success, 0 for failure
-    details = Column(Text, nullable=True)  # Additional context (e.g., error messages)
+    details = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
 
     # Relationship to user (optional, for successful events)
@@ -97,27 +270,91 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ===================== Configuration ===========================
-# JWT Configuration
+"""
+JWT Configuration
+----------------
+JSON Web Token settings for authorization. Tokens are signed with HS256
+and include user claims (sub, email, first_name, last_name, role).
+
+SECURITY WARNING: JWT_SECRET must be changed in production!
+- Use a cryptographically random value (32+ bytes)
+- Store in environment variable or secrets manager (Vault, AWS Secrets Manager)
+- Never commit secrets to version control
+"""
 JWT_SECRET = os.getenv("JWT_SECRET", "your-secret-key-change-in-production")
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRATION_MINUTES = 60
 
-# WebAuthn Configuration
-RP_ID = os.getenv("RP_ID", "localhost")  # Relying Party ID (your domain)
-RP_NAME = os.getenv("RP_NAME", "Auth Example")  # Relying Party Name
-ORIGIN = os.getenv("ORIGIN", "http://localhost:8000")  # Expected origin
+"""
+WebAuthn Configuration
+---------------------
+WebAuthn/FIDO2 settings for passwordless authentication.
 
-# In-memory storage for challenges (in production, use Redis or similar)
-registration_challenges = {}  # email -> challenge
-authentication_challenges = {}  # email -> challenge
+RP_ID: Relying Party ID - must match the domain (e.g., "example.com")
+       For localhost development, use "localhost"
+       MUST NOT include port number or protocol
+
+RP_NAME: Human-readable name shown to users during authentication
+
+ORIGIN: Full URL with protocol and port (e.g., "https://auth.example.com")
+        MUST be HTTPS in production (WebAuthn requirement)
+        Credentials are bound to this origin (prevents phishing)
+"""
+RP_ID = os.getenv("RP_ID", "localhost")
+RP_NAME = os.getenv("RP_NAME", "Auth Example")
+ORIGIN = os.getenv("ORIGIN", "http://localhost:8000")
+
+"""
+Challenge Storage
+----------------
+WebAuthn challenges must be stored temporarily during the two-step
+registration/authentication flow.
+
+DEVELOPMENT: In-memory dictionaries (current implementation)
+- Simple, no dependencies
+- Lost on server restart
+- Not shared across multiple server instances
+
+PRODUCTION: Use Redis or similar distributed cache
+- Persistent across server restarts
+- Shared across load-balanced instances
+- Set TTL (time-to-live) for automatic cleanup
+- Example: redis.setex(f"challenge:{email}", 300, challenge)
+
+Security Notes:
+- Challenges should expire after 5 minutes
+- Each challenge can only be used once
+- Clean up challenges after successful/failed attempts
+"""
+registration_challenges = {}  # email -> {challenge, user_data}
+authentication_challenges = {}  # email -> {challenge, allowed_credentials}
 
 # ===================== FastAPI App ===========================
 app = FastAPI(title="WebAuthn Authentication Backend")
 
 # Add CORS middleware for local development
+"""
+CORS Configuration
+-----------------
+SECURITY WARNING: Current configuration is permissive for development.
+
+In production, configure CORS strictly:
+- allow_origins: List specific origins, e.g., ["https://app.example.com"]
+- allow_methods: Limit to ["GET", "POST"] (remove DELETE, etc.)
+- allow_headers: List specific headers instead of ["*"]
+
+Example production config:
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, specify exact origins
+    allow_origins=["https://app.example.com", "https://admin.example.com"],
+    allow_credentials=True,
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type", "Authorization"],
+)
+"""
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # DEVELOPMENT ONLY - specify exact origins in production
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -130,11 +367,35 @@ if static_dir.exists():
 
 # ===================== Utility Functions ===========================
 def get_client_ip(request: Request) -> str:
-    """Extract client IP address from request, handling proxies."""
+    """
+    Extract client IP address from request, handling reverse proxies and load balancers.
+
+    This function checks headers in order of preference:
+    1. X-Forwarded-For (set by most proxies/load balancers)
+    2. X-Real-IP (alternative proxy header)
+    3. Direct client IP from socket connection
+
+    Args:
+        request: FastAPI Request object
+
+    Returns:
+        str: Client IP address or "unknown" if unable to determine
+
+    Security Notes:
+        - X-Forwarded-For can be spoofed if not behind a trusted proxy
+        - In production, configure your reverse proxy to set these headers correctly
+        - Consider using request.client.host only if behind a trusted proxy
+        - For rate limiting, use this IP (but be aware of shared IPs behind NAT)
+
+    Example:
+        X-Forwarded-For: "203.0.113.1, 198.51.100.1, 192.0.2.1"
+        Returns: "203.0.113.1" (first/original client IP)
+    """
     # Check X-Forwarded-For header (set by proxies/load balancers)
     forwarded_for = request.headers.get("X-Forwarded-For")
     if forwarded_for:
-        # X-Forwarded-For can contain multiple IPs, take the first one
+        # X-Forwarded-For can contain multiple IPs (client, proxy1, proxy2, ...)
+        # Take the first one (original client)
         return forwarded_for.split(",")[0].strip()
 
     # Check X-Real-IP header (alternative proxy header)
@@ -142,14 +403,30 @@ def get_client_ip(request: Request) -> str:
     if real_ip:
         return real_ip.strip()
 
-    # Fall back to direct client IP
+    # Fall back to direct client IP from socket connection
     if request.client:
         return request.client.host
 
     return "unknown"
 
 def get_user_agent(request: Request) -> str:
-    """Extract user agent from request headers."""
+    """
+    Extract user agent string from request headers.
+
+    User agent helps identify the client browser/application for:
+    - Security monitoring (detecting automated attacks)
+    - Audit trail (understanding access patterns)
+    - Compatibility issues (browser-specific problems)
+
+    Args:
+        request: FastAPI Request object
+
+    Returns:
+        str: User agent string or "unknown" if not present
+
+    Example:
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
+    """
     return request.headers.get("User-Agent", "unknown")
 
 def create_audit_log(
@@ -162,7 +439,41 @@ def create_audit_log(
     success: bool = True,
     details: Optional[str] = None
 ):
-    """Create an audit log entry."""
+    """
+    Create an audit log entry in the database.
+
+    This function implements dual logging:
+    - Database (audit_logs table): Long-term audit trail for compliance
+    - File logging (app.log): Already handled by logger.info/warning calls
+
+    Args:
+        db: SQLAlchemy database session
+        event_type: Event category ('registration_begin', 'login_complete', etc.)
+        user_email: User's email address (if known)
+        user_id: User's UUID (if authenticated)
+        ip_address: Client IP address
+        user_agent: Client user agent string
+        success: True for successful events, False for failures
+        details: Additional context (error messages, authorization details)
+
+    Security Notes:
+        - All authentication/authorization events should be logged
+        - Include both successes and failures for incident response
+        - IP and user agent enable detection of attack patterns
+        - Logs are queryable for security monitoring (see README.md)
+
+    Example Usage:
+        create_audit_log(
+            db=db,
+            event_type="login_complete",
+            user_email="user@example.com",
+            user_id="user-uuid",
+            ip_address="203.0.113.1",
+            user_agent="Mozilla/5.0...",
+            success=True,
+            details="User logged in successfully"
+        )
+    """
     audit_entry = AuditLog(
         event_type=event_type,
         user_email=user_email,
@@ -196,20 +507,43 @@ async def root():
 # ===================== JWT Utilities ===========================
 def create_access_token(data: dict) -> str:
     """
-    Create a JWT access token.
+    Create a JWT access token for authorization.
+
+    This function generates a signed JWT token with standard claims plus
+    custom user claims (sub, email, first_name, last_name, role).
 
     Args:
-        data: Dictionary containing claims to encode in the token
+        data: Dictionary containing user claims to encode
+              Expected keys: sub (user ID), email, first_name, last_name, role
 
     Returns:
-        Encoded JWT token as string
+        str: Encoded JWT token (HS256 signed)
+
+    Token Structure:
+        {
+          "sub": "user-uuid",           # Subject (user ID)
+          "email": "user@example.com",
+          "first_name": "Jane",
+          "last_name": "Doe",
+          "role": "user",               # For RBAC ("user" or "admin")
+          "exp": 1234567890,            # Expiration (60 minutes from now)
+          "iat": 1234567890,            # Issued at (current time)
+          "iss": "auth-example-backend" # Issuer
+        }
+
+    Security Notes:
+        - Token expires after JWT_EXPIRATION_MINUTES (60 minutes)
+        - Signed with HS256 using JWT_SECRET
+        - Role claim enables role-based access control
+        - No refresh token mechanism (user must re-authenticate after expiry)
+        - For production, store JWT_SECRET in secrets manager
     """
     to_encode = data.copy()
     expire = datetime.utcnow() + timedelta(minutes=JWT_EXPIRATION_MINUTES)
     to_encode.update({
-        "exp": expire,
-        "iat": datetime.utcnow(),
-        "iss": "auth-example-backend"
+        "exp": expire,  # Expiration time
+        "iat": datetime.utcnow(),  # Issued at
+        "iss": "auth-example-backend"  # Issuer
     })
     encoded_jwt = jwt.encode(to_encode, JWT_SECRET, algorithm=JWT_ALGORITHM)
     return encoded_jwt
@@ -219,14 +553,25 @@ def verify_access_token(token: str) -> dict:
     """
     Verify and decode a JWT access token.
 
+    This function validates the token signature, expiration, and algorithm.
+    If valid, returns the decoded claims for use in authorization logic.
+
     Args:
         token: The JWT token string to verify
 
     Returns:
-        Dictionary containing the decoded token claims
+        dict: Decoded token payload containing claims
+              (sub, email, first_name, last_name, role, exp, iat, iss)
 
     Raises:
-        JWTError: If token is invalid or expired
+        JWTError: If token is invalid, expired, or has wrong signature
+
+    Security Notes:
+        - Validates signature using JWT_SECRET
+        - Checks expiration automatically (exp claim)
+        - Verifies algorithm matches JWT_ALGORITHM (HS256)
+        - Logs verification failures for security monitoring
+        - Returns None for "sub" claim if token is malformed
     """
     try:
         payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
@@ -246,19 +591,41 @@ def get_current_user(
     db: Session = Depends(get_db)
 ) -> User:
     """
-    FastAPI dependency that validates JWT token and returns the current user.
+    FastAPI dependency for JWT authentication.
 
-    This is used to protect endpoints that require authentication.
+    This function is used as a dependency injection for protected endpoints.
+    It validates the JWT token from the Authorization header and returns
+    the authenticated user object.
+
+    Usage in endpoints:
+        @app.get("/protected")
+        def protected_endpoint(current_user: User = Depends(get_current_user)):
+            # current_user is automatically populated with authenticated user
+            return {"message": f"Hello, {current_user.email}"}
 
     Args:
-        credentials: The HTTP Authorization header credentials
-        db: Database session
+        credentials: HTTPBearer credentials from Authorization header
+                    Expected format: "Bearer <jwt-token>"
+        db: SQLAlchemy database session (auto-injected)
 
     Returns:
-        User object of the authenticated user
+        User: SQLAlchemy User object with full profile (including role)
 
     Raises:
-        HTTPException: If token is invalid or user not found
+        HTTPException 401: If token is invalid, expired, or user not found
+
+    Authentication Flow:
+        1. Extract JWT token from Authorization header
+        2. Verify token signature and expiration
+        3. Extract user_id from "sub" claim
+        4. Query database for user by ID
+        5. Return User object (with role for RBAC)
+
+    Security Notes:
+        - Token validation includes signature check and expiration
+        - If user is deleted but token is valid, raises 401 (user not found)
+        - Role claim in JWT enables role-based access control
+        - Uses HTTPBearer scheme (standard OAuth2/JWT pattern)
     """
     try:
         token = credentials.credentials

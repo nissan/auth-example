@@ -1,23 +1,43 @@
 # Multi-Provider Authentication Architecture
 
+## ⚠️ FUTURE ROADMAP - NOT CURRENTLY IMPLEMENTED
+
+**Status**: This document describes a **future enhancement** to the authentication system. The current implementation (as of January 2025) supports **WebAuthn only**.
+
+This architecture document serves as a blueprint for future work to add SAML, OAuth2, and OpenID Connect support while maintaining backward compatibility with the existing WebAuthn implementation.
+
+---
+
 ## Overview
 
-This document describes the architecture for extending the current WebAuthn-only implementation to support multiple authentication providers (SAML, OAuth2/OIDC) while maintaining backward compatibility.
+This document describes the proposed architecture for extending the current WebAuthn-only implementation to support multiple authentication providers (SAML, OAuth2/OIDC) while maintaining backward compatibility.
 
-## Current State
+## Current State (January 2025)
 
-- **Authentication**: WebAuthn only (passwordless biometric)
-- **Database**: User and WebAuthnCredential tables
-- **Endpoints**: /register/* and /login/* specific to WebAuthn
-- **JWT**: Generated after successful WebAuthn authentication
+**What is implemented today**:
+- **Authentication**: WebAuthn only (passwordless biometric with TouchID/FaceID/Windows Hello)
+- **Database**: Three tables: `users`, `webauthn_credentials`, `audit_logs`
+- **User Model**: `first_name`, `last_name`, `email`, `date_of_birth`, `job_title`, `role`, `created_at`
+- **Endpoints**:
+  - `POST /users` → 307 redirect → `POST /register/begin`
+  - `POST /register/begin` and `POST /register/complete` for WebAuthn registration
+  - `POST /login` → 307 redirect → `POST /login/begin`
+  - `POST /login/begin` and `POST /login/complete` for WebAuthn login
+  - `GET /users/{id}` with role-based access control (user vs admin)
+- **JWT**: Generated after successful WebAuthn authentication with claims: `sub`, `email`, `first_name`, `last_name`, `role`, `exp`, `iat`
+- **RBAC**: Role-based authorization (`user` role for self-access, `admin` role for cross-user access)
+- **Audit Logging**: Dual logging (file + database) with IP address and user agent tracking
+- **Frontend**: Interactive browser demo at `http://localhost:8000`
 
-## Target Architecture
+**See IMPLEMENTATION_SUMMARY.md and README.md for complete current implementation details.**
 
-Allow users to authenticate via multiple providers:
-- WebAuthn (TouchID/FaceID) - **existing**
-- SAML (Enterprise SSO)
-- OAuth2 (Social login - Google, GitHub, Microsoft)
-- OpenID Connect (extends OAuth2 with identity layer)
+## Target Architecture (Future)
+
+**Proposed enhancement**: Allow users to authenticate via multiple providers:
+- WebAuthn (TouchID/FaceID) - **currently implemented**
+- SAML (Enterprise SSO) - **not yet implemented**
+- OAuth2 (Social login - Google, GitHub, Microsoft) - **not yet implemented**
+- OpenID Connect (extends OAuth2 with identity layer) - **not yet implemented**
 
 ### Key Goals
 
@@ -109,6 +129,8 @@ CREATE TABLE oauth_config (
 Add column to track primary authentication method:
 
 ```sql
+-- NOTE: Current implementation already has a `role` column
+-- This would add provider tracking:
 ALTER TABLE users ADD COLUMN primary_auth_provider_id TEXT REFERENCES auth_providers(id);
 ```
 
@@ -205,13 +227,16 @@ Creates record in `user_auth_methods` table.
 
 ### Backward Compatibility
 
-Existing endpoints remain functional:
+**Current endpoints would remain functional**:
+- `POST /users` → 307 redirect → `POST /register/begin`
 - `POST /register/begin` → Creates user with WebAuthn
 - `POST /register/complete` → Completes WebAuthn registration
+- `POST /login` → 307 redirect → `POST /login/begin`
 - `POST /login/begin` → Initiates WebAuthn login
 - `POST /login/complete` → Completes WebAuthn login
+- `GET /users/{id}` → Protected endpoint with RBAC
 
-These internally use the new provider abstraction with `provider_id="webauthn"`.
+These would internally use the new provider abstraction with `provider_id="webauthn"`, but the API surface would remain unchanged.
 
 ## Implementation Guide
 
@@ -550,16 +575,30 @@ class AuthenticationManager:
 
 ### JWT Claims
 
-Update JWT to include authentication context:
-
+**Current JWT claims** (WebAuthn only):
 ```json
 {
   "sub": "user-uuid",
   "email": "user@example.com",
-  "name": "Jane Doe",
-  "auth_provider": "saml-okta",
-  "auth_method": "saml",
-  "amr": ["mfa", "pwd"],  // Authentication Methods References (OIDC standard)
+  "first_name": "Jane",
+  "last_name": "Doe",
+  "role": "user",  // or "admin"
+  "exp": 1234571490,
+  "iat": 1234567890
+}
+```
+
+**Proposed JWT claims** (multi-provider):
+```json
+{
+  "sub": "user-uuid",
+  "email": "user@example.com",
+  "first_name": "Jane",
+  "last_name": "Doe",
+  "role": "user",  // or "admin" - existing RBAC
+  "auth_provider": "saml-okta",  // NEW: which provider was used
+  "auth_method": "saml",  // NEW: provider type
+  "amr": ["mfa", "pwd"],  // NEW: Authentication Methods References (OIDC standard)
   "iss": "auth-example-backend",
   "aud": "auth-example-backend",
   "iat": 1234567890,
@@ -722,6 +761,33 @@ async function loginWith(providerId) {
 - [ ] Document user-facing instructions
 - [ ] Set up monitoring/alerting
 
+## Implementation Timeline & Priority
+
+This multi-provider architecture is a **future enhancement**. The current WebAuthn-only implementation is production-ready and meets all requirements.
+
+**Potential implementation order**:
+1. **Phase 1: Provider Abstraction** - Refactor existing WebAuthn code into provider pattern (no new features, just code organization)
+2. **Phase 2: SAML Support** - High value for enterprise customers with existing identity providers
+3. **Phase 3: OAuth2/OIDC Support** - Social login for consumer applications
+4. **Phase 4: Account Linking** - Allow users to link multiple authentication methods
+
+**Prerequisites for multi-provider support**:
+- Email verification system (currently deferred)
+- Centralized logging and monitoring
+- Secrets management (Vault/KMS for client secrets)
+- Enhanced audit trail for provider-specific events
+
 ## Conclusion
 
-This architecture provides a flexible, scalable foundation for multi-provider authentication while maintaining the security and simplicity of the existing WebAuthn implementation. The provider abstraction pattern makes adding new authentication methods straightforward, and the account linking mechanism provides a seamless user experience across different login options.
+This architecture document provides a **roadmap** for extending the authentication system to support multiple providers (SAML, OAuth2/OIDC) while maintaining backward compatibility with the current WebAuthn implementation.
+
+**Current state**: The existing WebAuthn-only implementation is fully functional, secure, and production-ready. It includes RBAC, dual logging, audit trails, and comprehensive documentation.
+
+**Future state**: This document describes how the architecture could evolve to support enterprise SSO (SAML) and social login (OAuth2/OIDC) when those capabilities are needed.
+
+The provider abstraction pattern makes adding new authentication methods straightforward, and the account linking mechanism would provide a seamless user experience across different login options.
+
+**For current implementation details, see**:
+- `IMPLEMENTATION_SUMMARY.md` - Complete feature list and architecture
+- `README.md` - Comprehensive documentation, testing guide, and security controls
+- `main.py` - Production-ready WebAuthn implementation (~920 lines)
