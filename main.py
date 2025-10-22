@@ -523,7 +523,7 @@ def login_complete(
 
     try:
         # Get the credential from assertion
-        credential_id = bytes.fromhex(request.assertion.get("id", ""))
+        credential_id = base64url_to_bytes(request.assertion.get("id", ""))
 
         # Find the credential in database
         credential = db.query(WebAuthnCredential).filter(
