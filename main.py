@@ -520,6 +520,7 @@ def login_complete(
     stored_data = authentication_challenges[request.email]
 
     from webauthn import verify_authentication_response
+    from webauthn.helpers import base64url_to_bytes
 
     try:
         # Get the credential from assertion
