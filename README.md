@@ -253,9 +253,14 @@ This protocol design prevents replay attacks and ensures the user is physically 
 
 | Original Spec Operation | Our Implementation | Semantic Equivalence |
 |-------------------------|-------------------|---------------------|
-| `POST /users` (register) | `POST /register/begin` → `POST /register/complete` | Two-step registration creates user |
-| `POST /login` | `POST /login/begin` → `POST /login/complete` | Two-step login returns JWT |
+| `POST /users` (register) | `POST /users` (307 redirect) → `POST /register/begin` → `POST /register/complete` | Two-step registration creates user |
+| `POST /login` | `POST /login` (307 redirect) → `POST /login/begin` → `POST /login/complete` | Two-step login returns JWT |
 | `GET /users/{id}` | `GET /users/{id}` | **Unchanged** - works as specified |
+
+**Spec Compatibility Notes**:
+- `POST /users` and `POST /login` return `307 Temporary Redirect` to preserve the POST method and request body
+- Clients that follow redirects (most HTTP libraries) work seamlessly with the original spec endpoints
+- The redirects maintain API compatibility while supporting WebAuthn's required two-step protocol
 
 **The original requirements are fully satisfied**: users can register, login, and retrieve information. The only difference is that registration and login require two sequential API calls due to the cryptographic protocol.
 
@@ -379,7 +384,9 @@ Completes registration by submitting the WebAuthn credential created by the user
 
 Login flow uses **WebAuthn challenge-response** instead of external authentication services like Auth0. Returns a **JWT token** containing user claims and role.
 
-#### Step 1: POST /login/begin
+**Note**: For spec compatibility, `POST /login` is available as a redirect endpoint. It returns a `307 Temporary Redirect` to `/login/begin`, preserving the POST method and request body. Clients that follow redirects will automatically be routed to the correct endpoint.
+
+#### Step 1: POST /login/begin (or POST /login)
 
 Initiates login by providing email. Server generates challenge and returns allowed credentials.
 

@@ -578,6 +578,22 @@ def register_complete(
 
 
 # ===================== WebAuthn Login Endpoints ===========================
+
+@app.post("/login", status_code=status.HTTP_307_TEMPORARY_REDIRECT)
+def login_redirect():
+    """
+    Redirect POST /login to /login/begin for spec compatibility.
+
+    The original spec requested POST /login, but WebAuthn requires a two-step
+    process (begin + complete). This endpoint redirects to /login/begin to
+    maintain some level of spec compatibility while supporting the WebAuthn protocol.
+
+    Returns a 307 Temporary Redirect, which preserves the POST method and body.
+    """
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(url="/login/begin", status_code=status.HTTP_307_TEMPORARY_REDIRECT)
+
+
 @app.post("/login/begin")
 def login_begin(
     login_data: LoginBeginRequest,

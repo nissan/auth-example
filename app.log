@@ -6,3 +6,6 @@
 2025-10-22 15:24:27,224 [INFO] Registration initiated for: test@example.com from IP: 127.0.0.1
 2025-10-22 15:26:16,698 [INFO] Database tables created successfully
 2025-10-22 15:26:24,391 [INFO] Registration initiated for: test2@example.com from IP: 127.0.0.1
+2025-10-22 15:28:57,439 [INFO] Database tables created successfully
+2025-10-22 15:29:04,451 [WARNING] Login attempt for non-existent user: test@example.com from IP: 127.0.0.1
+2025-10-22 15:29:10,415 [WARNING] Login attempt for non-existent user: test2@example.com from IP: 127.0.0.1
