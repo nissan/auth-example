@@ -33,12 +33,12 @@ def get_user(user_id: str) -> UserViewModel:
 
 @app.post("/users",response_model=UserViewModel,status_code=status.HTTP_201_CREATED)
 def create_user(payload: UserCreateModel) -> UserViewModel:
-    dummy_user = UserViewModel(
+    user = UserViewModel(
         id="1",
-        name="John Smith",
-        email="john@acme.com",
-        date_of_birth=datetime.fromisoformat("1980-04-14T10:00:00+00:00"), 
-        job_title="Janitor",
+        name=payload.name,
+        email=payload.email,
+        date_of_birth=payload.date_of_birth, 
+        job_title=payload.job_title,
     )
-    return dummy_user
+    return user
 
