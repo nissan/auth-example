@@ -1,42 +1,95 @@
 @base = http://localhost:8000
 @userEmail = john@example.com
-@password = Str0ngP@ssw0rd!!
 @name = John Doe
 @job = Engineer
 @dob = 1980-04-14T10:00:00Z
 
-###
-# Get my user profile (self or admin)
-# Uses the captured user_id from registration and the latest access_token.
-GET {{base}}/users/{{user_id}}
+# Note: Replace this with your actual user_id after registration
+@user_id = your-user-id-here
+# Note: Replace this with your actual JWT token after login
+@access_token = your-jwt-token-here
+
+###################################################
+# IMPORTANT: WebAuthn Testing Limitations
+###################################################
+# WebAuthn requires browser APIs (navigator.credentials) and cannot be
+# tested with HTTP clients like curl, Postman, or REST Client.
+#
+# To actually test TouchID authentication:
+# 1. You need a browser-based frontend with JavaScript
+# 2. Call /register/begin to get challenge
+# 3. Use navigator.credentials.create() with the challenge
+# 4. Send result to /register/complete
+#
+# The endpoints below show the correct request/response structure,
+# but actual WebAuthn flow requires browser integration.
+###################################################
 
 ###
-# Register user
-# Creates a new user and stores `user_id` for later requests.
-# Run once; subsequent runs will 409 if email already exists.
-# @name register
-POST {{base}}/users
+# Step 1: Initiate Registration
+# Returns WebAuthn challenge and options for the browser
+# @name registerBegin
+POST {{base}}/register/begin
 Content-Type: application/json
 
 {
   "name": "{{name}}",
   "email": "{{userEmail}}",
   "date_of_birth": "{{dob}}",
-  "job_title": "{{job}}",
-  "password": "{{password}}"
+  "job_title": "{{job}}"
 }
 
-
-
+###
+# Step 2: Complete Registration (REQUIRES BROWSER)
+# This endpoint expects a WebAuthn credential from navigator.credentials.create()
+# Cannot be tested with HTTP clients - needs JavaScript in browser
+# @name registerComplete
+# POST {{base}}/register/complete
+# Content-Type: application/json
+#
+# {
+#   "email": "{{userEmail}}",
+#   "credential": { /* WebAuthn AttestationCredential object */ }
+# }
 
 ###
-# Simplified Password login
-# user credentials -> returns access+refresh
-# @name login
-POST {{base}}/login
+# Step 3: Initiate Login
+# Returns WebAuthn challenge for authentication
+# @name loginBegin
+POST {{base}}/login/begin
 Content-Type: application/json
 
 {
-  "email": "{{userEmail}}",
-  "password": "{{password}}"
+  "email": "{{userEmail}}"
 }
+
+###
+# Step 4: Complete Login (REQUIRES BROWSER)
+# This endpoint expects a WebAuthn assertion from navigator.credentials.get()
+# Cannot be tested with HTTP clients - needs JavaScript in browser
+# @name loginComplete
+# POST {{base}}/login/complete
+# Content-Type: application/json
+#
+# {
+#   "email": "{{userEmail}}",
+#   "assertion": { /* WebAuthn AssertionCredential object */ }
+# }
+
+###
+# Step 5: Get User Profile (Protected Endpoint)
+# Requires valid JWT token from login
+# Users can only access their own data
+GET {{base}}/users/{{user_id}}
+Authorization: Bearer {{access_token}}
+
+###
+# Test: Unauthorized Access (should return 401)
+GET {{base}}/users/{{user_id}}
+
+###
+# Test: Forbidden Access (should return 403)
+# Try to access another user's profile
+# Replace with a different user_id to test authorization
+GET {{base}}/users/different-user-id
+Authorization: Bearer {{access_token}}
