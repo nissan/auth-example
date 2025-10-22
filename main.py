@@ -250,6 +250,7 @@ def register_begin(
 
     # Import WebAuthn utilities
     from webauthn import generate_registration_options
+    from webauthn.helpers import bytes_to_base64url
     from webauthn.helpers.structs import (
         PublicKeyCredentialCreationOptions,
         UserVerificationRequirement,
@@ -259,10 +260,11 @@ def register_begin(
 
     # Generate registration options
     user_id = str(uuid.uuid4())
+    user_id_bytes = user_id.encode('utf-8')  # WebAuthn requires bytes
     options = generate_registration_options(
         rp_id=RP_ID,
         rp_name=RP_NAME,
-        user_id=user_id,
+        user_id=user_id_bytes,
         user_name=request.email,
         user_display_name=request.name,
         authenticator_selection=AuthenticatorSelectionCriteria(
@@ -286,10 +288,10 @@ def register_begin(
     # Return options as JSON for the browser
     return {
         "publicKey": {
-            "challenge": options.challenge.decode('utf-8') if isinstance(options.challenge, bytes) else options.challenge,
+            "challenge": bytes_to_base64url(options.challenge),
             "rp": {"id": options.rp.id, "name": options.rp.name},
             "user": {
-                "id": options.user.id.decode('utf-8') if isinstance(options.user.id, bytes) else options.user.id,
+                "id": bytes_to_base64url(options.user.id),
                 "name": options.user.name,
                 "displayName": options.user.display_name
             },
@@ -425,6 +427,7 @@ def login_begin(
         )
 
     from webauthn import generate_authentication_options
+    from webauthn.helpers import bytes_to_base64url
     from webauthn.helpers.structs import UserVerificationRequirement
 
     # Generate authentication options
@@ -448,13 +451,13 @@ def login_begin(
     # Return options as JSON for the browser
     return {
         "publicKey": {
-            "challenge": options.challenge.decode('utf-8') if isinstance(options.challenge, bytes) else options.challenge,
+            "challenge": bytes_to_base64url(options.challenge),
             "timeout": options.timeout,
             "rpId": options.rp_id,
             "allowCredentials": [
                 {
                     "type": "public-key",
-                    "id": cred.credential_id.hex() if isinstance(cred.credential_id, bytes) else cred.credential_id
+                    "id": bytes_to_base64url(cred.credential_id)
                 } for cred in credentials
             ],
             "userVerification": "required"
