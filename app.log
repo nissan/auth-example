@@ -9,3 +9,11 @@
 2025-10-22 15:28:57,439 [INFO] Database tables created successfully
 2025-10-22 15:29:04,451 [WARNING] Login attempt for non-existent user: test@example.com from IP: 127.0.0.1
 2025-10-22 15:29:10,415 [WARNING] Login attempt for non-existent user: test2@example.com from IP: 127.0.0.1
+2025-10-22 16:02:43,353 [WARNING] Login attempt for non-existent user: nissan.dookeran@gmail.com from IP: 127.0.0.1
+2025-10-22 16:03:02,546 [INFO] Registration initiated for: nissan.dookeran@gmail.com from IP: 127.0.0.1
+2025-10-22 16:03:06,735 [INFO] User registered successfully: Nissan Dookeran (nissan.dookeran@gmail.com), job: Software Developer from IP: 127.0.0.1
+2025-10-22 16:03:06,741 [INFO] Login initiated for: nissan.dookeran@gmail.com from IP: 127.0.0.1
+2025-10-22 16:03:10,311 [INFO] User logged in successfully: Nissan Dookeran (nissan.dookeran@gmail.com) from IP: 127.0.0.1
+2025-10-22 16:03:10,317 [INFO] User data accessed: nissan.dookeran@gmail.com by nissan.dookeran@gmail.com (role: user) from IP: 127.0.0.1
+2025-10-22 16:05:17,631 [WARNING] JWT verification failed: Not enough segments
+2025-10-22 16:05:47,192 [INFO] User data accessed: nissan.dookeran@gmail.com by nissan.dookeran@gmail.com (role: user) from IP: 127.0.0.1
