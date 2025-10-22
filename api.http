@@ -6,6 +6,11 @@
 @dob = 1980-04-14T10:00:00Z
 
 ###
+# Get my user profile (self or admin)
+# Uses the captured user_id from registration and the latest access_token.
+GET {{base}}/users/{{user_id}}
+
+###
 # Register user
 # Creates a new user and stores `user_id` for later requests.
 # Run once; subsequent runs will 409 if email already exists.
@@ -21,10 +26,7 @@ Content-Type: application/json
   "password": "{{password}}"
 }
 
-###
-# Get my user profile (self or admin)
-# Uses the captured user_id from registration and the latest access_token.
-GET {{base}}/users/{{user_id}}
+
 
 
 ###
