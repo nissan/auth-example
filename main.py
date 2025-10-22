@@ -411,7 +411,7 @@ def register_begin(
         ip_address=ip_address,
         user_agent=user_agent,
         success=True,
-        details=f"Registration challenge created for {user_data.name}"
+        details=f"Registration challenge created for {user_data.first_name} {user_data.last_name}"
     )
 
     logger.info(f"Registration initiated for: {user_data.email} from IP: {ip_address}")
