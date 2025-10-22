@@ -1,5 +1,5 @@
 from typing import Union
-from fastapi import FastAPI, status
+from fastapi import FastAPI, status, Body
 from pydantic import BaseModel, EmailStr, Field, constr, validator
 from datetime import datetime
 
@@ -42,3 +42,10 @@ def create_user(payload: UserCreateModel) -> UserViewModel:
     )
     return user
 
+@app.post("/login")
+def login_user(
+    email: str = Body(..., embed=True),
+    password: str = Body(..., embed=True),
+):
+    dummy_jwt="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxYzRmODc4YS0yZTUzLTQ3MjctOTMyMy1kN2JjNzQ4M2I5N2UiLCJuYW1lIjoiSmFuZSBEb2UiLCJlbWFpbCI6ImphbmVAZXhhbXBsZS5jb20iLCJyb2xlIjoidXNlciIsImlzcyI6InNlY3VyZS1iYWNrZW5kIiwiYXVkIjoic2VjdXJlLWJhY2tlbmQtdXNlcnMiLCJpYXQiOjE3MzAzMjg3MDAsImV4cCI6MTczMDMyOTYwMCwianRpIjoiYTJmNzc4NjEtZDc3Zi00ZTlkLWI1NDctZTQ4ZGVhODdhZDRkIiwidHYiOjF9.SpI3M8GlPGe_LqQttwC0HVWSpCBZIrqIYhL9qG9jX2E"
+    return {"access_token": dummy_jwt, "token_type": "bearer"}
