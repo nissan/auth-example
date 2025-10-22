@@ -74,11 +74,28 @@ pip install -r requirements.txt
 - Generic error messages prevent user enumeration
 - Comprehensive logging for security monitoring
 
-### Important: WebAuthn Testing
+### Frontend Demo (Interactive Testing)
 
-WebAuthn requires browser APIs and **cannot be tested with curl/Postman**. To test:
-1. Create HTML frontend with JavaScript
-2. Use `navigator.credentials.create()` for registration
-3. Use `navigator.credentials.get()` for authentication
+**NEW**: Fully functional browser-based demo at `http://localhost:8000`
 
-See `README.md` section "Testing" for details.
+**Frontend Structure**:
+- `static/index.html`: Main page with registration/login forms and profile view
+- `static/js/webauthn.js`: WebAuthn client library (base64url encoding, browser API calls)
+- `static/js/api.js`: API client and JWT token management
+- `static/js/app.js`: Application state, event handlers, UI updates
+- `static/css/style.css`: Modern card-based design with animations
+
+**Key Features**:
+- Tab interface (Register / Login)
+- Real-time JWT expiration countdown
+- Session persistence (sessionStorage)
+- Loading overlays during biometric prompts
+- Success/error message display
+- Responsive design (mobile & desktop)
+- Browser compatibility checking
+
+**Testing**: Open browser to `http://localhost:8000`, fill registration form, authenticate with TouchID, view profile.
+
+### Multi-Provider Authentication (Future)
+
+See `MULTI_AUTH_ARCHITECTURE.md` for complete design to add SAML/OAuth2/OIDC support alongside WebAuthn.
