@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebAuthn Demo - TouchID Authentication</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🔐 WebAuthn Authentication Demo</h1>
+            <p class="subtitle">Passwordless login with TouchID / FaceID / Windows Hello</p>
+        </header>
+
+        <!-- Status Messages -->
+        <div id="status-message" class="status-message hidden"></div>
+
+        <!-- Landing View -->
+        <div id="landing-view" class="view active">
+            <div class="card">
+                <div class="tabs">
+                    <button class="tab-button active" data-tab="register">Register</button>
+                    <button class="tab-button" data-tab="login">Login</button>
+                </div>
+
+                <!-- Registration Tab -->
+                <div id="register-tab" class="tab-content active">
+                    <h2>Create Account</h2>
+                    <form id="register-form">
+                        <div class="form-group">
+                            <label for="reg-name">Full Name</label>
+                            <input type="text" id="reg-name" name="name" required placeholder="Jane Doe">
+                        </div>
+                        <div class="form-group">
+                            <label for="reg-email">Email</label>
+                            <input type="email" id="reg-email" name="email" required placeholder="jane@example.com">
+                        </div>
+                        <div class="form-group">
+                            <label for="reg-dob">Date of Birth</label>
+                            <input type="date" id="reg-dob" name="date_of_birth" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="reg-job">Job Title</label>
+                            <input type="text" id="reg-job" name="job_title" required placeholder="Software Engineer">
+                        </div>
+                        <button type="submit" class="btn btn-primary">
+                            <span class="btn-text">Register with Biometrics</span>
+                            <span class="btn-icon">👤</span>
+                        </button>
+                    </form>
+                    <p class="hint">You'll be prompted to use TouchID, FaceID, or Windows Hello to create your account securely.</p>
+                </div>
+
+                <!-- Login Tab -->
+                <div id="login-tab" class="tab-content">
+                    <h2>Sign In</h2>
+                    <form id="login-form">
+                        <div class="form-group">
+                            <label for="login-email">Email</label>
+                            <input type="email" id="login-email" name="email" required placeholder="jane@example.com">
+                        </div>
+                        <button type="submit" class="btn btn-primary">
+                            <span class="btn-text">Login with Biometrics</span>
+                            <span class="btn-icon">🔓</span>
+                        </button>
+                    </form>
+                    <p class="hint">You'll be prompted to use your registered biometric to sign in.</p>
+                </div>
+            </div>
+
+            <!-- Browser Compatibility Notice -->
+            <div class="notice">
+                <h3>Browser Requirements</h3>
+                <ul>
+                    <li>✅ Chrome / Edge (recommended)</li>
+                    <li>✅ Safari (macOS Big Sur+ / iOS 14+)</li>
+                    <li>✅ Firefox</li>
+                    <li>⚠️ Requires biometric hardware (TouchID, FaceID, Windows Hello, or security key)</li>
+                </ul>
+            </div>
+        </div>
+
+        <!-- Profile View -->
+        <div id="profile-view" class="view">
+            <div class="card">
+                <div class="profile-header">
+                    <h2>👤 Your Profile</h2>
+                    <button id="logout-btn" class="btn btn-secondary">Logout</button>
+                </div>
+
+                <div class="profile-content">
+                    <div class="profile-field">
+                        <span class="field-label">Name:</span>
+                        <span id="profile-name" class="field-value">-</span>
+                    </div>
+                    <div class="profile-field">
+                        <span class="field-label">Email:</span>
+                        <span id="profile-email" class="field-value">-</span>
+                    </div>
+                    <div class="profile-field">
+                        <span class="field-label">Date of Birth:</span>
+                        <span id="profile-dob" class="field-value">-</span>
+                    </div>
+                    <div class="profile-field">
+                        <span class="field-label">Job Title:</span>
+                        <span id="profile-job" class="field-value">-</span>
+                    </div>
+                    <div class="profile-field">
+                        <span class="field-label">Member Since:</span>
+                        <span id="profile-created" class="field-value">-</span>
+                    </div>
+                    <div class="profile-field">
+                        <span class="field-label">Session Expires:</span>
+                        <span id="profile-expires" class="field-value">-</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Loading Overlay -->
+        <div id="loading-overlay" class="loading-overlay hidden">
+            <div class="spinner"></div>
+            <p id="loading-message">Processing...</p>
+        </div>
+    </div>
+
+    <footer>
+        <p>Built with WebAuthn API • No passwords stored • Phishing-resistant authentication</p>
+        <p><a href="/docs" target="_blank">API Documentation</a></p>
+    </footer>
+
+    <!-- JavaScript -->
+    <script src="/static/js/webauthn.js"></script>
+    <script src="/static/js/api.js"></script>
+    <script src="/static/js/app.js"></script>
+</body>
+</html>

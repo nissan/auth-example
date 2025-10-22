@@ -1,5 +1,8 @@
 from typing import Union, Optional
 from fastapi import FastAPI, status, Body, Depends, HTTPException
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import HTMLResponse, FileResponse
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr, Field, constr, validator
 from datetime import datetime, timedelta
 from sqlalchemy import create_engine, Column, String, DateTime, Text, Integer, LargeBinary, ForeignKey
@@ -8,6 +11,7 @@ import uuid
 import logging
 import os
 from jose import JWTError, jwt
+from pathlib import Path
 
 # ===================== SQLAlchemy setup ===========================
 DATABASE_URL = "sqlite:///./app.db"
@@ -86,11 +90,37 @@ authentication_challenges = {}  # email -> challenge
 # ===================== FastAPI App ===========================
 app = FastAPI(title="WebAuthn Authentication Backend")
 
+# Add CORS middleware for local development
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # In production, specify exact origins
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Mount static files
+static_dir = Path(__file__).parent / "static"
+if static_dir.exists():
+    app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+
 # Create database tables on startup
 @app.on_event("startup")
 def startup_event():
     Base.metadata.create_all(bind=engine)
     logger.info("Database tables created successfully")
+
+# Root endpoint - serve demo frontend
+@app.get("/", response_class=HTMLResponse)
+async def root():
+    """Serve the WebAuthn demo page"""
+    index_file = static_dir / "index.html"
+    if index_file.exists():
+        return FileResponse(index_file)
+    return HTMLResponse(
+        content="<h1>WebAuthn Backend</h1><p>API is running. Demo frontend not yet installed.</p><p>Visit <a href='/docs'>/docs</a> for API documentation.</p>",
+        status_code=200
+    )
 
 # ===================== JWT Utilities ===========================
 def create_access_token(data: dict) -> str:
